@@ -32,8 +32,6 @@ Right now it is only a **placeholder** with non-functional tabs; all core functi
 From the project root:
 
 ```bash
-cd "Tarot Solver"
-
 # (Recommended) Create and activate a virtualenv
 python -m venv .venv
 .\.venv\Scripts\activate  # Windows
