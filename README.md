@@ -183,4 +183,5 @@ The GUI is **under active construction** and is **not yet usable** for real game
 
 ## License
 
-Private / unlicensed unless stated otherwise.
+This project is licensed under the **MIT License**.  
+See the `LICENSE` file for full details.
