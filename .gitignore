@@ -1,0 +1,27 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# Local data and logs
+checkpoints/
+runs/
+
+# OS-specific
+Thumbs.db
+.DS_Store
+
