@@ -47,6 +47,7 @@ class Agent:
     checkpoint_path: str | None = None
     arch_name: str | None = None
     parents: List[AgentId] = field(default_factory=list)
+    can_use_as_ga_parent: bool = True
 
     matches_played: int = 0
     total_match_score: float = 0.0

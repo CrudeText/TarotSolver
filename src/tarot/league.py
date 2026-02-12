@@ -6,12 +6,15 @@ The core entry point is ``run_league_generation``, which:
 - runs a configurable number of tournament rounds using `run_round_with_policies`
 - optionally fine-tunes the top-K agents with PPO (if torch is available)
 - applies GA `next_generation` to produce the next population
+
+For multi-generation runs with pause/cancel support, use ``run_league_generations``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 import random
-from typing import Dict, List, Tuple
+import threading
+from typing import Dict, Iterator, List, Tuple
 
 from .ga import GAConfig, compute_fitness, next_generation
 from .policies import policy_for_agent
@@ -167,5 +170,58 @@ def run_league_generation(
     return new_pop, summary
 
 
-__all__ = ["LeagueConfig", "run_league_generation"]
+class LeagueRunControl:
+    """
+    Thread-safe control for multi-generation league runs.
+
+    Set cancel_requested from another thread to stop the run at the next
+    generation boundary. Pause is handled by the caller: stop iterating
+    on run_league_generations to pause.
+    """
+
+    def __init__(self) -> None:
+        self.cancel_requested = threading.Event()
+
+    def request_cancel(self) -> None:
+        self.cancel_requested.set()
+
+
+def run_league_generations(
+    pop: Population,
+    cfg: LeagueConfig,
+    num_generations: int,
+    rng: random.Random | None = None,
+    control: LeagueRunControl | None = None,
+) -> Iterator[Tuple[Population, Dict[str, float], int]]:
+    """
+    Run multiple league generations, yielding after each one.
+
+    Yields (population, summary, generation_index) after each generation.
+    The caller can stop iterating to pause. If control is provided and
+    control.cancel_requested is set, the generator stops at the next
+    generation boundary.
+
+    Args:
+        pop: Initial population.
+        cfg: League configuration.
+        num_generations: Number of generations to run.
+        rng: Random generator.
+        control: Optional control for cancel signalling.
+
+    Yields:
+        (population, summary_dict, generation_index) for each completed generation.
+    """
+    rng = rng or random.Random()
+    current_pop = pop
+
+    for gen_idx in range(num_generations):
+        if control and control.cancel_requested.is_set():
+            return
+
+        new_pop, summary = run_league_generation(current_pop, cfg, rng=rng)
+        yield new_pop, summary, gen_idx
+        current_pop = new_pop
+
+
+__all__ = ["LeagueConfig", "LeagueRunControl", "run_league_generation", "run_league_generations"]
 

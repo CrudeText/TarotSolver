@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtCore, QtWidgets
+
+from .league_tab import make_league_tab
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -23,7 +25,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
 
         tabs.addTab(self._make_dashboard_tab(), "Dashboard")
-        tabs.addTab(self._make_league_tab(), "League")
+        tabs.addTab(make_league_tab(), "League")
         tabs.addTab(self._make_agents_tab(), "Agents")
         tabs.addTab(self._make_play_tab(), "Play")
         tabs.addTab(self._make_settings_tab(), "Settings")
@@ -47,30 +49,6 @@ class MainWindow(QtWidgets.QMainWindow):
         buttons_row.addStretch(1)
         buttons_row.addWidget(QtWidgets.QPushButton("Start League Run (placeholder)"))
         buttons_row.addWidget(QtWidgets.QPushButton("Open Latest League Log (placeholder)"))
-        buttons_row.addStretch(1)
-        layout.addLayout(buttons_row)
-
-        layout.addStretch(1)
-        return widget
-
-    def _make_league_tab(self) -> QtWidgets.QWidget:
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
-
-        layout.addWidget(self._make_centered_label("League configuration and status (placeholder)."))
-
-        form_group = QtWidgets.QGroupBox("League config (no-op)")
-        form_layout = QtWidgets.QFormLayout(form_group)
-        form_layout.addRow("Generations:", QtWidgets.QSpinBox())
-        form_layout.addRow("Population size:", QtWidgets.QSpinBox())
-        form_layout.addRow("Rounds / generation:", QtWidgets.QSpinBox())
-        form_layout.addRow("Deals / match:", QtWidgets.QSpinBox())
-        layout.addWidget(form_group)
-
-        buttons_row = QtWidgets.QHBoxLayout()
-        buttons_row.addStretch(1)
-        buttons_row.addWidget(QtWidgets.QPushButton("Run One Generation (placeholder)"))
-        buttons_row.addWidget(QtWidgets.QPushButton("Run Full League (placeholder)"))
         buttons_row.addStretch(1)
         layout.addLayout(buttons_row)
 

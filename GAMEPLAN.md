@@ -320,18 +320,57 @@ repeated tournament rounds, optional PPO fine-tuning, and GA-based evolution.
 
 ### 8.1 League view (training via tournaments)
 
-- **Configuration:**
-  - Player counts enabled (start with 4p).
-  - Population size and initial population source (random, existing Agents, hall-of-fame).
-  - Tournament parameters: rounds per generation, deals per match, tables per round.
-  - ELO parameters: K-factor, margin scaling, per-count weights.
-  - PPO budget: which agents get fine-tuned and for how many steps/updates.
-  - GA parameters: population size, elite fraction, mutation prob/std.
-- **Live monitoring:**
-  - Current generation and phase (tournament / PPO / GA).
-  - Charts: best/median/worst global ELO, fitness, diversity metrics.
-  - Table views for in-progress and completed rounds.
-  - Controls: start / pause / stop, snapshot population, promote elites to hall-of-fame.
+The League tab is organised into: **Population management**, **League structure**, **GA parameters**, **Run controls + live metrics**, and **Export**.
+
+#### 8.1.1 Population management
+
+- **Population table:** Editable table listing agents or groups, with delete buttons per row.
+- **Source options:**
+  - Generate from scratch (random parameters per individual).
+  - Import a saved population exported from a previous run.
+  - Build from a smaller base: select individuals (custom, Hall of Fame, or from previous runs), then augment using:
+    - Target size.
+    - Mutation parameters applied to the base selection.
+    - Cloned individuals from the base (exact copies, no mutation).
+- **Tools:** Buttons next to the table to add individuals (random, from selection with mutation/clone) or import. User can start from scratch or build incrementally.
+- **GA-parent checkbox (per agent/group):** Allow or disallow the agent/group to be used as a parent in the GA. When unchecked, the agent participates in tournaments (and thus affects ELO) but is excluded from selection for reproduction. Use case: **reference agents** (e.g. pretrained or deterministic profiles) with fixed ELOs to anchor and normalise the population’s level.
+
+#### 8.1.2 League structure parameters
+
+- Player count per table (3 / 4 / 5).
+- Deals per match.
+- Matches per league generation.
+- League style: ELO-based (round-robin, stratified, Swiss) or bracket-style (single/double elimination, etc.).
+- Optional: ELO parameters (K-factor, margin scaling, per-count weights).
+
+#### 8.1.3 GA parameters
+
+- Selection criteria (elite fraction, tournament size, rank-based, etc.).
+- Fitness calculation (weights for global ELO, per-count ELO, average match score).
+- Number of generations.
+- Cloning vs mutation: elite cloning, cloning from base selection, mutation parameters (prob, std) for traits/metadata.
+- Optional: PPO budget (which agents get fine-tuned, steps/updates).
+
+#### 8.1.4 Run controls and live metrics
+
+- **Buttons:** Start | Pause at next generation | Cancel.
+- **Live metrics (updated during training):**
+  - ELO average, min, max.
+  - Ranking table (best agents by ELO, ELO gain, etc.).
+  - Charts (ELO evolution, fitness, diversity).
+- Tables and graphs are interactive during training (sort, filter, zoom, drill down).
+
+#### 8.1.5 Export
+
+- **When to export:**
+  - Option: export at each generation.
+  - Option: export every X generations.
+  - On pause or finish: button to export the current population.
+- **What to export:**
+  - Full population.
+  - Selected agents (manual selection).
+  - Filtered subset (by ELO range, fitness, generation, etc.).
+- Exported populations can be reimported as “Import from previous run” in Population management.
 
 ### 8.2 Agents & Hall of Fame
 

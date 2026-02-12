@@ -5,10 +5,8 @@ Behaviour:
 - If not already running inside a virtual environment, create ``.venv`` in the
   project root (if it does not exist), then re-run this script inside it.
 - Inside the venv:
-  - Install the package in editable mode with all extras needed for development:
-        pip install -e .[dev,rl,gui]
-  - Start the placeholder GUI:
-        python -m tarot_gui.main
+  - If tarot_gui is importable: start the GUI directly (no pip install).
+  - Otherwise: install the package with pip install -e .[dev,rl,gui], then start the GUI.
 """
 from __future__ import annotations
 
@@ -36,6 +34,15 @@ def venv_python_path() -> Path:
     return VENV_DIR / "bin" / "python"
 
 
+def package_installed() -> bool:
+    """Return True if tarot_gui (and thus the full package) is importable."""
+    try:
+        import tarot_gui  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def ensure_venv_and_rerun() -> None:
     """Create .venv if needed and re-run this script inside it."""
     if not VENV_DIR.exists():
@@ -52,14 +59,14 @@ def ensure_venv_and_rerun() -> None:
 
 
 def inside_venv_main() -> None:
-    """Install dependencies and run the GUI."""
-    print("Installing tarot-solver with dev, RL, and GUI extras into virtualenv ...")
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "-e", ".[dev,rl,gui]"],
-        cwd=str(ROOT),
-    )
+    """Install dependencies if needed, then run the GUI."""
+    if not package_installed():
+        print("Installing tarot-solver with dev, RL, and GUI extras into virtualenv ...")
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-e", ".[dev,rl,gui]"],
+            cwd=str(ROOT),
+        )
 
-    print("Starting Tarot Solver GUI ...")
     subprocess.check_call(
         [sys.executable, "-m", "tarot_gui.main"],
         cwd=str(ROOT),
@@ -72,7 +79,6 @@ def main() -> None:
         return
 
     if in_virtualenv():
-        # Already in some virtualenv; just behave like inside_venv_main.
         inside_venv_main()
     else:
         ensure_venv_and_rerun()

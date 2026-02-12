@@ -43,8 +43,13 @@ def compute_fitness(
 def _sorted_agents_by_fitness(
     pop: Population,
     fitness_fn: Callable[[Agent], float],
+    *,
+    ga_parents_only: bool = False,
 ) -> List[Tuple[Agent, float]]:
-    scored = [(agent, fitness_fn(agent)) for agent in pop.agents.values()]
+    agents = pop.agents.values()
+    if ga_parents_only:
+        agents = [a for a in agents if a.can_use_as_ga_parent]
+    scored = [(agent, fitness_fn(agent)) for agent in agents]
     scored.sort(key=lambda af: af[1], reverse=True)
     return scored
 
@@ -53,8 +58,10 @@ def select_elites(
     pop: Population,
     cfg: GAConfig,
     fitness_fn: Callable[[Agent], float],
+    *,
+    ga_parents_only: bool = True,
 ) -> List[Agent]:
-    scored = _sorted_agents_by_fitness(pop, fitness_fn)
+    scored = _sorted_agents_by_fitness(pop, fitness_fn, ga_parents_only=ga_parents_only)
     elite_count = max(1, int(cfg.population_size * cfg.elite_fraction))
     return [a for a, _ in scored[:elite_count]]
 
@@ -132,37 +139,45 @@ def next_generation(
 ) -> Population:
     """
     Build the next generation from the current population using:
-      - Elites (top fraction by fitness) copied unchanged.
+      - Reference agents (can_use_as_ga_parent=False) are copied unchanged.
+      - Elites (top fraction by fitness among eligible agents) copied unchanged.
       - Remaining slots filled by mutated children of parents selected
-        via roulette selection on fitness.
+        via roulette selection on fitness (only from eligible agents).
 
     NOTE: This function assumes that ELOs and match stats have already been
     updated (e.g. by running tournaments) before it is called.
     """
     rng = rng or random.Random()
 
-    scored = _sorted_agents_by_fitness(pop, fitness_fn)
-    elites = select_elites(pop, cfg, fitness_fn)
-    elite_ids = {a.id for a in elites}
+    reference_agents = [a for a in pop.agents.values() if not a.can_use_as_ga_parent]
+    eligible_agents = [a for a in pop.agents.values() if a.can_use_as_ga_parent]
 
     new_pop = Population()
-    # Copy elites as-is
+    # Copy reference agents as-is (they participate in tournaments but not in evolution)
+    for agent in reference_agents:
+        new_pop.add(agent)
+
+    slots_for_evolved = max(0, cfg.population_size - len(reference_agents))
+    if slots_for_evolved == 0:
+        return new_pop
+
+    scored = _sorted_agents_by_fitness(pop, fitness_fn, ga_parents_only=True)
+    elite_count = max(1, int(slots_for_evolved * cfg.elite_fraction))
+    elites = [a for a, _ in scored[:elite_count]]
+
     for agent in elites:
         new_pop.add(agent)
 
-    # Select parents for children
-    remaining = cfg.population_size - len(elites)
+    remaining = slots_for_evolved - len(elites)
     if remaining <= 0:
         return new_pop
 
     parents = _roulette_select(scored, remaining, rng)
-    # Simple child ID scheme: parent_id + "-cN"
     child_counts: Dict[AgentId, int] = {}
     for parent in parents:
         count = child_counts.get(parent.id, 0) + 1
         child_counts[parent.id] = count
         new_id = f"{parent.id}-c{count}"
-        # Ensure we don't collide with existing IDs
         while new_id in pop.agents or new_id in new_pop.agents:
             count += 1
             child_counts[parent.id] = count
