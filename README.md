@@ -20,6 +20,31 @@ Tarot Solver is a Python project for **playing, simulating and training agents**
 
 ---
 
+## Classic workflow
+
+1. **Build a population** — Add groups of agents (random, imported, or mutated from selection). Optionally mark some as reference agents (no GA reproduction).
+2. **Configure league** — Set player count, deals per match, league style (ELO or bracket), GA parameters.
+3. **Run** — Start the league; tournaments run, ELO updates, GA evolves the population. Pause or let it complete.
+4. **Export** — Save the population (full or filtered by ELO) for later runs.
+5. **Play & explore** — Browse agents, promote best to Hall of Fame, spectate games, or play vs AI.
+
+---
+
+## High-level features (built or planned)
+
+| Feature | Description |
+|---------|-------------|
+| **Agent navigation** | Browse agents by generation, traits, ELO; view lineage and training history. |
+| **Hall of Fame** | Best-ever agents as benchmarks; use them as opponents or in custom tables. |
+| **ELO rating** | Per-player-count and global ELO; margin-aware updates after each match. |
+| **Tournament running** | ELO-based (round-robin, stratified, Swiss) or bracket-style; parallel tables. |
+| **League training** | Tournament rounds + optional PPO fine-tuning + GA evolution, generation by generation. |
+| **Play vs AI** | Pick your seat and opponents; play a full game against trained agents. |
+| **Spectate** | Watch games unfold; optional policy overlays (top-k actions). |
+| **Export / Import** | Save and load populations (full or filtered); merge or replace. |
+
+---
+
 ## Setup
 
 From the project root:
