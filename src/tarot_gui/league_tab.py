@@ -355,7 +355,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
         graphs_placeholder = QtWidgets.QLabel("Charts area (Phase 4)")
         graphs_placeholder.setMinimumHeight(200)
         graphs_placeholder.setAlignment(QtCore.Qt.AlignCenter)
-        graphs_placeholder.setStyleSheet("background-color: #f0f0f0; border: 1px solid #ccc;")
+        graphs_placeholder.setObjectName("chartsPlaceholder")
+        graphs_placeholder.setStyleSheet("QLabel#chartsPlaceholder { border: 1px solid #606060; }")
         layout.addWidget(graphs_placeholder, stretch=1)
         scroll.setWidget(content)
 

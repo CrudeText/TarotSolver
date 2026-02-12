@@ -147,19 +147,18 @@ The observation is **phase-dependent** (bidding vs play). All information below 
 
 ### 4.7 Personality traits (“model personalities”)
 
-- **Goal:** Give each model **tangible, human-readable parameters** (e.g. “aggressiveness”) so users can quickly understand and compare play styles.
-- **Representation:** A small **trait vector** attached to each model, e.g.:
-  - Aggressiveness / risk-taking
-  - Defensive focus / loss-aversion
-  - Preference for bidding high vs low
-  - (Extensible list; traits should be **modular and easy to add**)
-- **Usage:**\n
-  - As **metadata** for display, filtering, and tournament setup (e.g. “run a tournament of very aggressive vs very defensive models”).\n
-  - Optionally as **conditioning input** to the policy (the RL agent can learn different behaviours for different trait settings).\n
-- **Modularity:** Implement traits via a small **registry/config** so adding a new trait is:
-  1. Define name, range (e.g. 0–1), and default.\n
-  2. Add how it appears in the GUI (label, tooltip, slider).\n
-  3. (Optionally) Wire it into the observation/conditioning if we want it to affect behaviour.
+- **Goal:** Give each model **tangible, human-readable parameters** so users can quickly understand and compare play styles.
+- **Decision (locked in):** Traits are **descriptive by default** — metadata stored with the agent, used for display, filtering, and population/GA augmentation. They do **not** affect policy decisions unless we explicitly add conditioning later.
+- **Rationale:** Conditioning (traits as policy input) adds training complexity and hyperparameters. Descriptive traits are simpler, require no policy changes, and still support filtering (e.g. “more defensive agents”), population diversity analysis, and Hall of Fame comparison. Conditioning can be added later for a subset of traits if we want explicit style control.
+
+**Suggested trait list (extensible):**
+- **Bidding:** aggressiveness, hand optimism, bluff tendency
+- **Play:** trump usage (cut early vs hold), petit-au-bout risk, defensive focus, partner cooperation (5p)
+- **Context:** adaptability (to match score), patience
+
+**Representation:** A small **trait vector** attached to each model (e.g. 0–1 per trait). Traits are set via GA mutation, manual input, or (later) post-hoc statistics from observed play.
+- **Usage:** Metadata for display, filtering, tournament setup, and GA augmentation. Optionally, **conditioning** (traits as policy input) can be added later for selected traits if we want explicit style control.
+- **Modularity:** Implement traits via a small **registry/config** so adding a new trait is: (1) define name, range, default; (2) add GUI representation (label, tooltip, slider); (3) optionally wire into observation for conditioning.
 
 ---
 
@@ -223,7 +222,7 @@ The observation is **phase-dependent** (bidding vs play). All information below 
 ### 6.5 Extensions (later, still Phase 4)
 
 - **Multi-agent / self-play:** extend the trainer so the same policy can control multiple seats, or multiple policies can be trained jointly, while preserving the current observation/action encodings.
-- **Personality conditioning:** extend the network input with the personality trait vector so a single checkpoint can represent multiple “styles” (see §4.7).
+- **Personality conditioning (optional):** extend the network input with the personality trait vector so a single checkpoint can represent multiple “styles” (see §4.7). Traits remain descriptive by default.
 - **Tournament/ELO signal in training:** optionally add a **slow-timescale reward** term computed from tournament/ELO performance (Phase 5) to bias learning towards agents that do well in long-run leagues, not just isolated matches.
 - **Compute & deployment:** keep the implementation **CPU-first but GPU-aware**; the GUI will expose a simple “device” setting to select CPU vs GPU when launching training.
 
@@ -426,7 +425,7 @@ The League tab is organised into: **Population management**, **League structure*
 | 9 | GUI priority | Start simple (tournaments, results, training, metrics); spectate and play-vs-AI later. |
 | 10 | Action space | Separate bidding phase and playing phase (two distinct decision steps). |
 | 11 | GUI tech | Desktop. |
-| 12 | Personality traits | Models have modular, human-readable traits used for conditioning and GUI visualisation. |
+| 12 | Personality traits | Models have modular, human-readable traits; **descriptive by default** (metadata only); conditioning optional later. |
 | 13 | One model vs per–player-count | Agents can support multiple player counts; we track **per–player-count ELOs** and a **global ELO** so that a single agent can be viewed as a “global player” while still seeing which variants it excels at. |
 
 ---

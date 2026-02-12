@@ -42,6 +42,7 @@ Tarot Solver is a Python project for **playing, simulating and training agents**
 | **Play vs AI** | Pick your seat and opponents; play a full game against trained agents. |
 | **Spectate** | Watch games unfold; optional policy overlays (top-k actions). |
 | **Export / Import** | Save and load populations (full or filtered); merge or replace. |
+| **Personality traits** | Descriptive metadata per agent (bidding, play style, context); used for filtering and GA; conditioning optional later. |
 
 ---
 

@@ -14,6 +14,7 @@ from typing import Optional
 from PySide6 import QtCore, QtWidgets
 
 from .league_tab import make_league_tab
+from .themes import DARK, LIGHT, apply_theme, get_saved_theme, save_theme
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -98,22 +99,39 @@ class MainWindow(QtWidgets.QMainWindow):
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
 
-        layout.addWidget(self._make_centered_label("Global settings (placeholder)."))
-
-        form_group = QtWidgets.QGroupBox("Settings (no-op)")
+        form_group = QtWidgets.QGroupBox("Appearance")
         form_layout = QtWidgets.QFormLayout(form_group)
-        form_layout.addRow("Default device:", QtWidgets.QComboBox())
-        form_layout.addRow("Max parallel jobs:", QtWidgets.QSpinBox())
+        theme_combo = QtWidgets.QComboBox()
+        theme_combo.addItems(["Dark", "Light"])
+        saved = get_saved_theme()
+        theme_combo.setCurrentIndex(0 if saved == "dark" else 1)
+        theme_combo.currentTextChanged.connect(self._on_theme_changed)
+        form_layout.addRow("Theme:", theme_combo)
         layout.addWidget(form_group)
+
+        other_group = QtWidgets.QGroupBox("Other (placeholder)")
+        other_layout = QtWidgets.QFormLayout(other_group)
+        other_layout.addRow("Default device:", QtWidgets.QComboBox())
+        other_layout.addRow("Max parallel jobs:", QtWidgets.QSpinBox())
+        layout.addWidget(other_group)
 
         layout.addStretch(1)
         return widget
+
+    def _on_theme_changed(self, text: str) -> None:
+        theme = DARK if text.lower() == "dark" else LIGHT
+        save_theme(theme)
+        app = QtWidgets.QApplication.instance()
+        if app:
+            apply_theme(app, theme)
 
 
 def main(argv: Optional[list[str]] = None) -> None:
     import sys
 
     app = QtWidgets.QApplication(argv or sys.argv)
+    theme = get_saved_theme()
+    apply_theme(app, theme)
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
