@@ -13,7 +13,7 @@ from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 
-from .league_tab import make_league_tab
+from .league_tab import LeagueTabState, LeagueTabWidget, RunSectionWidget, make_league_tab
 from .themes import DARK, LIGHT, apply_theme, get_saved_theme, save_theme
 
 
@@ -25,8 +25,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         tabs = QtWidgets.QTabWidget()
 
-        tabs.addTab(self._make_dashboard_tab(), "Dashboard")
-        tabs.addTab(make_league_tab(), "League")
+        league_tab = make_league_tab()
+        league_state = league_tab.state()
+
+        tabs.addTab(self._make_dashboard_tab(league_state), "Dashboard")
+        tabs.addTab(league_tab, "League Parameters")
         tabs.addTab(self._make_agents_tab(), "Agents")
         tabs.addTab(self._make_play_tab(), "Play")
         tabs.addTab(self._make_settings_tab(), "Settings")
@@ -40,18 +43,14 @@ class MainWindow(QtWidgets.QMainWindow):
         label.setAlignment(QtCore.Qt.AlignCenter)
         return label
 
-    def _make_dashboard_tab(self) -> QtWidgets.QWidget:
+    def _make_dashboard_tab(self, league_state: LeagueTabState) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
 
         layout.addWidget(self._make_centered_label("Dashboard overview (placeholder)."))
 
-        buttons_row = QtWidgets.QHBoxLayout()
-        buttons_row.addStretch(1)
-        buttons_row.addWidget(QtWidgets.QPushButton("Start League Run (placeholder)"))
-        buttons_row.addWidget(QtWidgets.QPushButton("Open Latest League Log (placeholder)"))
-        buttons_row.addStretch(1)
-        layout.addLayout(buttons_row)
+        run_section = RunSectionWidget(league_state)
+        layout.addWidget(run_section)
 
         layout.addStretch(1)
         return widget

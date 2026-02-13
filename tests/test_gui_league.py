@@ -10,11 +10,22 @@ import pytest
 # Skip if PySide6 not available
 pyside6 = pytest.importorskip("PySide6")
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from tarot.persistence import population_to_dict
 from tarot.tournament import Agent, Population
-from tarot_gui.league_tab import Group, GRP_COL_NAME, LeagueTabState, LeagueTabWidget, make_league_tab
+from tarot_gui.league_tab import (
+    Group,
+    GRP_COL_AGENTS,
+    GRP_COL_CLONE_ONLY,
+    GRP_COL_FIXED_ELO,
+    GRP_COL_GA_PARENT,
+    GRP_COL_NAME,
+    GRP_COL_PLAY_IN_LEAGUE,
+    LeagueTabState,
+    LeagueTabWidget,
+    make_league_tab,
+)
 
 
 def test_league_tab_state():
@@ -44,7 +55,7 @@ def test_league_tab_table_sync():
     tab._refresh_table()
     assert tab._table.rowCount() == 1
     assert tab._table.item(0, GRP_COL_NAME).text() == "Test group"
-    assert tab._table.item(0, 3).text() == "1"  # # agents
+    assert tab._table.item(0, GRP_COL_AGENTS).text() == "1"  # # agents
 
 
 def test_add_random():
@@ -84,3 +95,101 @@ def test_import_replace():
         assert tab.state().groups[0].agents[0].id == "grp_imp_0_0"
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+def _get_checkbox(tab: LeagueTabWidget, row: int, col: int) -> QtWidgets.QCheckBox:
+    """Get the checkbox in a table cell."""
+    cell = tab._table.cellWidget(row, col)
+    assert cell is not None
+    cb = cell.findChild(QtWidgets.QCheckBox)
+    assert cb is not None
+    return cb
+
+
+def test_checkbox_ga_parent():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    agents = [Agent(id="a", name="A", player_counts=[4], can_use_as_ga_parent=True)]
+    g = Group(id="grp_x", name="Test", agents=agents)
+    tab = LeagueTabWidget()
+    tab._state = LeagueTabState(groups=[g])
+    tab._refresh_table()
+    cb = _get_checkbox(tab, 0, GRP_COL_GA_PARENT)
+    assert cb.isChecked()
+    cb.setChecked(False)
+    assert not g.all_can_use_as_ga_parent()
+    assert not agents[0].can_use_as_ga_parent
+    cb.setChecked(True)
+    assert g.all_can_use_as_ga_parent()
+    assert agents[0].can_use_as_ga_parent
+
+
+def test_checkbox_fixed_elo():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    agents = [Agent(id="a", name="A", player_counts=[4], fixed_elo=False)]
+    g = Group(id="grp_x", name="Test", agents=agents)
+    tab = LeagueTabWidget()
+    tab._state = LeagueTabState(groups=[g])
+    tab._refresh_table()
+    cb = _get_checkbox(tab, 0, GRP_COL_FIXED_ELO)
+    assert not cb.isChecked()
+    cb.setChecked(True)
+    assert g.all_fixed_elo()
+    assert agents[0].fixed_elo
+    cb.setChecked(False)
+    assert not g.all_fixed_elo()
+    assert not agents[0].fixed_elo
+
+
+def test_checkbox_clone_only():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    agents = [Agent(id="a", name="A", player_counts=[4], clone_only=False)]
+    g = Group(id="grp_x", name="Test", agents=agents)
+    tab = LeagueTabWidget()
+    tab._state = LeagueTabState(groups=[g])
+    tab._refresh_table()
+    cb = _get_checkbox(tab, 0, GRP_COL_CLONE_ONLY)
+    assert not cb.isChecked()
+    cb.setChecked(True)
+    assert g.all_clone_only()
+    assert agents[0].clone_only
+    cb.setChecked(False)
+    assert not g.all_clone_only()
+    assert not agents[0].clone_only
+
+
+def test_checkbox_play_in_league():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    agents = [Agent(id="a", name="A", player_counts=[4], play_in_league=True)]
+    g = Group(id="grp_x", name="Test", agents=agents)
+    tab = LeagueTabWidget()
+    tab._state = LeagueTabState(groups=[g])
+    tab._refresh_table()
+    cb = _get_checkbox(tab, 0, GRP_COL_PLAY_IN_LEAGUE)
+    assert cb.isChecked()
+    cb.setChecked(False)
+    assert not g.all_play_in_league()
+    assert not agents[0].play_in_league
+    cb.setChecked(True)
+    assert g.all_play_in_league()
+    assert agents[0].play_in_league
+
+
+def test_checkbox_persists_after_refresh():
+    """Checkbox state persists when table is refreshed."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    agents = [
+        Agent(id="a", name="A", player_counts=[4], fixed_elo=True, clone_only=True),
+    ]
+    g = Group(id="grp_x", name="Test", agents=agents)
+    tab = LeagueTabWidget()
+    tab._state = LeagueTabState(groups=[g])
+    tab._refresh_table()
+    cb_fixed = _get_checkbox(tab, 0, GRP_COL_FIXED_ELO)
+    cb_clone = _get_checkbox(tab, 0, GRP_COL_CLONE_ONLY)
+    assert cb_fixed.isChecked()
+    assert cb_clone.isChecked()
+    tab._refresh_table()  # Rebuild table
+    cb_fixed2 = _get_checkbox(tab, 0, GRP_COL_FIXED_ELO)
+    cb_clone2 = _get_checkbox(tab, 0, GRP_COL_CLONE_ONLY)
+    assert cb_fixed2.isChecked()
+    assert cb_clone2.isChecked()

@@ -115,6 +115,10 @@ def mutate_agent(
         checkpoint_path=parent.checkpoint_path,
         arch_name=parent.arch_name,
         parents=[parent.id],
+        can_use_as_ga_parent=parent.can_use_as_ga_parent,
+        fixed_elo=parent.fixed_elo,
+        clone_only=parent.clone_only,
+        play_in_league=parent.play_in_league,
     )
 
     # Reset match stats for new generation

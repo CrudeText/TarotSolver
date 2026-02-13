@@ -154,6 +154,9 @@ def clone_agents(
                 arch_name=agent.arch_name,
                 parents=list(agent.parents),
                 can_use_as_ga_parent=agent.can_use_as_ga_parent,
+                fixed_elo=agent.fixed_elo,
+                clone_only=agent.clone_only,
+                play_in_league=agent.play_in_league,
                 matches_played=0,
                 total_match_score=0.0,
             )

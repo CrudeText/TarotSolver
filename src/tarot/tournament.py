@@ -48,6 +48,9 @@ class Agent:
     arch_name: str | None = None
     parents: List[AgentId] = field(default_factory=list)
     can_use_as_ga_parent: bool = True
+    fixed_elo: bool = False
+    clone_only: bool = False
+    play_in_league: bool = True
 
     matches_played: int = 0
     total_match_score: float = 0.0
@@ -147,6 +150,24 @@ def make_random_tables(
     tables: List[List[AgentId]] = []
     for i in range(0, len(shuffled) - len(shuffled) % table_size, table_size):
         tables.append(shuffled[i : i + table_size])
+    return tables
+
+
+def make_elo_stratified_tables(
+    pop: Population,
+    table_size: int,
+    rng: random.Random,
+) -> List[List[AgentId]]:
+    """
+    Split agents into tables by ELO strata: sort by elo_global, then group
+    consecutive agents. Similar-strength agents play together.
+    """
+    agents = sorted(pop.agents.values(), key=lambda a: a.elo_global)
+    ids = [a.id for a in agents]
+    tables: List[List[AgentId]] = []
+    n = len(ids) - len(ids) % table_size
+    for i in range(0, n, table_size):
+        tables.append(ids[i : i + table_size])
     return tables
 
 
@@ -340,12 +361,17 @@ def run_match_for_table(
     raise ValueError(f"Unsupported player_count {player_count}; expected 3, 4, or 5.")
 
 
+MatchmakingStyle = str  # "random" | "elo"
+
+
 def run_round_with_policies(
     pop: Population,
     player_count: int,
     num_deals: int,
     rng: random.Random,
     make_policy: Callable[[Agent], Policy],
+    *,
+    matchmaking_style: MatchmakingStyle = "random",
 ) -> None:
     """
     Run one tournament round using a per-Agent policy factory.
@@ -353,12 +379,17 @@ def run_round_with_policies(
     Each agent at a table is converted into a Policy via ``make_policy``; these
     policies control all **play** decisions for that table. ELO and match stats
     are updated exactly as in ``run_round_random``.
+
+    matchmaking_style: "random" (shuffle agents) or "elo" (stratify by ELO).
     """
     if player_count not in (3, 4, 5):
         raise ValueError(f"Unsupported player_count {player_count}; expected 3, 4, or 5.")
 
     table_size = player_count
-    tables = make_random_tables(pop.all_ids(), table_size=table_size, rng=rng)
+    if matchmaking_style == "elo":
+        tables = make_elo_stratified_tables(pop, table_size=table_size, rng=rng)
+    else:
+        tables = make_random_tables(pop.all_ids(), table_size=table_size, rng=rng)
     for table_ids in tables:
         table_agents = [pop.get(aid) for aid in table_ids]
         policies = [make_policy(a) for a in table_agents]
@@ -371,9 +402,11 @@ def run_round_with_policies(
 __all__ = [
     "Agent",
     "AgentId",
+    "MatchmakingStyle",
     "Population",
     "update_elo_pairwise",
     "make_random_tables",
+    "make_elo_stratified_tables",
     "run_random_match_3p",
     "run_random_match_4p",
     "run_random_match_5p",

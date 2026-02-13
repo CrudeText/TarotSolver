@@ -311,19 +311,26 @@ repeated tournament rounds, optional PPO fine-tuning, and GA-based evolution.
 
 - **Tech (decision):** **Desktop** application (e.g. PyQt, Tkinter, or Electron).
 - **Top-level sections:**
-  - **Dashboard:** Overview of current league, best agents, recent matches.
-  - **League:** Configure and monitor tournament+PPO+GA training runs.
+  - **Dashboard:** Overview of current league, best agents, recent matches. **Run controls** (Start, Pause, Cancel) and **ELO metrics** live here, plus charts area.
+  - **League Parameters:** Configure population, league structure, GA parameters, and export. Descriptive charts (population + league insights) at bottom — between Population and League structure.
   - **Agents & Hall of Fame:** Browse agents, see generations, traits, ELOs.
   - **Custom Tables & Play:** Ad-hoc matches, spectate, play vs AI.
   - **Settings:** Compute, storage, defaults.
 
-### 8.1 League view (training via tournaments)
+### 8.1 League Parameters tab (training configuration)
 
-The League tab is organised into: **Population management**, **League structure**, **GA parameters**, **Run controls + live metrics**, and **Export**.
+The **League Parameters** tab is organised into: **Population management**, **Descriptive charts** (placeholder), **League structure**, **GA parameters**, and **Export**.
+
+**Run controls** (Start, Pause, Cancel) and **live ELO metrics** are in the **Dashboard** tab, together with the charts area (Phase 4). Export options remain in League Parameters.
+
+At the **bottom** of the League Parameters board: a row with **League structure | GA parameters | Export** (narrow column, left) and a **large descriptive charts area** (right). The charts area shows:
+- **Generation flow diagram:** Visual flow: Population → Tournament → Fitness → Elites + Parents → Mutation / Clone → Next Generation.
+- **GA visual:** Bars for Elite % (kept unchanged), Mutation % (probability of perturbing traits), and Mut. std (standard deviation of trait perturbation, with a bell-curve hint).
 
 #### 8.1.1 Population management
 
 - **Population table:** Editable table listing agents or groups, with delete buttons per row.
+- **Population pie chart:** Small pie chart between the table and Tools, showing distribution by group, with "Total Agents" tally on the same row.
 - **Source options:**
   - Generate from scratch (random parameters per individual).
   - Import a saved population exported from a previous run.
@@ -332,26 +339,28 @@ The League tab is organised into: **Population management**, **League structure*
     - Mutation parameters applied to the base selection.
     - Cloned individuals from the base (exact copies, no mutation).
 - **Tools:** Buttons next to the table to add individuals (random, from selection with mutation/clone) or import. User can start from scratch or build incrementally.
-- **GA-parent checkbox (per agent/group):** Allow or disallow the agent/group to be used as a parent in the GA. When unchecked, the agent participates in tournaments (and thus affects ELO) but is excluded from selection for reproduction. Use case: **reference agents** (e.g. pretrained or deterministic profiles) with fixed ELOs to anchor and normalise the population’s level.
+- **Per-group flag checkboxes** (with column header tooltips): **GA parent** — allow group as GA parent; **Fixed ELO** — ELO not updated after matches; **Clone only** — when GA parent, only clone; **Play in league** — include in tournament tables.
 
 #### 8.1.2 League structure parameters
 
 - Player count per table (3 / 4 / 5).
 - Deals per match.
 - Matches per league generation.
-- League style: ELO-based (round-robin, stratified, Swiss) or bracket-style (single/double elimination, etc.).
+- League style: **ELO-based matchmaking** (stratify by ELO so similar-strength agents play together) or **random matchmaking** (shuffle agents into tables).
 - Optional: ELO parameters (K-factor, margin scaling, per-count weights).
 
 #### 8.1.3 GA parameters
 
-- Selection criteria (elite fraction, tournament size, rank-based, etc.).
+- **Elite fraction (%):** Top fraction preserved unchanged each generation.
+- **Mutation prob (%):** Probability of mutating each trait when creating children.
+- **Mutation std:** Standard deviation for Gaussian perturbation of traits (e.g. 0.1 = small random changes). Used when mutating; see GA visual in charts area.
+- **Generations:** Number of generations to run.
 - Fitness calculation (weights for global ELO, per-count ELO, average match score).
-- Number of generations.
-- Cloning vs mutation: elite cloning, cloning from base selection, mutation parameters (prob, std) for traits/metadata.
 - Optional: PPO budget (which agents get fine-tuned, steps/updates).
 
-#### 8.1.4 Run controls and live metrics
+#### 8.1.4 Run controls and live metrics (Dashboard tab)
 
+- **Location:** Run controls live in the **Dashboard** tab (not League Parameters).
 - **Buttons:** Start | Pause at next generation | Cancel.
 - **Live metrics (updated during training):**
   - ELO average, min, max.
@@ -407,6 +416,66 @@ The League tab is organised into: **Population management**, **League structure*
 - **Storage:** checkpoint retention, replay logging level.
 - **League defaults:** reusable presets for league configuration.
 - **UI:** theme, chart smoothing, refresh intervals.
+
+### 8.5 Project management & experiment tracking (planned)
+
+High-end features for saving, resuming, and analysing league runs.
+
+#### 8.5.1 Project save/load
+
+- **Project file/directory:** A single project bundles everything needed to restore the full state:
+  - Population (groups + agents with ELOs, traits, checkpoint references).
+  - League config (player count, deals/match, rounds/gen, matchmaking, GA params).
+  - PPO/training config (if used).
+  - Generation index (last completed generation).
+  - Random seed (for reproducibility).
+  - Log data reference or embedded logs (see §8.5.3).
+  - Run report (see §8.5.7).
+- **Load:** Restore full UI state (groups, config, charts data) and allow resuming.
+- **Save as:** Branch experiments by saving a copy under a new name without overwriting the current project.
+
+#### 8.5.2 Resume training
+
+- **Pause at generation boundary:** When the user pauses at the end of a generation, store the current population and generation index.
+- **Resume:** Continue from the next generation with the same population and config (same RNG state if reproducibility is enabled).
+- **GUI and CLI:** Both support resume (e.g. `tarot league-4p --resume project.json`).
+
+#### 8.5.3 Log data persistence
+
+- **During league/training runs:** Append to a structured log (e.g. JSON Lines or SQLite):
+  - Per generation: ELO min/mean/max, fitness, agent count, timestamp.
+  - Per PPO update (if applicable): loss, policy_loss, value_loss, entropy.
+- **Stored in project:** Logs are either embedded in the project file or referenced by path within the project directory.
+- **Load for charts:** When opening a project, load log data to drive ELO-over-time, loss curves, and other graphs.
+
+#### 8.5.4 Auto-save
+
+- **Configurable interval:** Save project state periodically (e.g. every N generations or every N minutes).
+- **Configurable retention:** Keep the last K auto-save checkpoints (e.g. 3) to avoid unbounded disk use.
+- **Crash recovery:** On restart, offer to resume from the most recent auto-save.
+
+#### 8.5.5 Experiment comparison
+
+- **Multiple runs per project (or linked projects):** Store/load several runs (different configs, populations, or seeds).
+- **Side-by-side comparison:** Compare ELO curves, final populations, and config differences across runs.
+- **Export:** Optionally export comparison tables or overlay charts.
+
+#### 8.5.6 Agent lineage and history
+
+- **Parent–child tracking:** Use existing `parents` metadata to track lineage across generations.
+- **Lineage browser:** View agent family tree (ancestors and descendants).
+- **History:** Per-agent summary of generations participated, ELO trajectory, and PPO updates (when applicable).
+- **Export:** Optional lineage graph (e.g. DOT/Graphviz or interactive HTML).
+
+#### 8.5.7 Run report (included in project)
+
+- **Report generation:** Produce a run report (PDF/HTML/Markdown) for a project or run:
+  - Config snapshot (league, GA, PPO if used).
+  - ELO progression (min/mean/max over generations).
+  - Top agents and lineage snippets.
+  - Charts (ELO curves, optional loss curves).
+- **Stored in project:** The report is saved as part of the project files (e.g. `report.html` or `report.pdf` in the project directory).
+- **Regenerate on demand:** Option to refresh the report when the project is updated.
 
 ---
 
@@ -520,7 +589,16 @@ Once these are clear, Phase 1 can start; the rest can be decided as we reach eac
      - Wire League tab to load and visualise `runs/league_*/generation_*.json`.
      - Implement basic Agents list from league logs plus Hall-of-Fame view.
      - Add a simple Play flow using existing engine/env policies (e.g. run one match, show textual summary).
+10. **Project management & experiment tracking (§8.5).**
+    - Planned features (in implementation order):
+      - Project save/load with save-as (§8.5.1).
+      - Log data persistence and chart loading (§8.5.3).
+      - Resume training (§8.5.2).
+      - Auto-save with configurable interval and retention (§8.5.4).
+      - Experiment comparison (§8.5.5).
+      - Agent lineage and history browser (§8.5.6).
+      - Run report included in project files (§8.5.7).
 
 ---
 
-*Document version: 1.4 — Phases 1–5 implemented (engine, envs, PPO, tournaments, league); Phase 6 GUI shell added (PySide6 placeholders).*
+*Document version: 1.5 — Added §8.5 Project management & experiment tracking (save/load, resume, logs, auto-save, experiment comparison, agent lineage, run report).*

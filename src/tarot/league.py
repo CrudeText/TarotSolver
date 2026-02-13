@@ -18,7 +18,7 @@ from typing import Dict, Iterator, List, Tuple
 
 from .ga import GAConfig, compute_fitness, next_generation
 from .policies import policy_for_agent
-from .tournament import Agent, Population, run_round_with_policies
+from .tournament import Agent, MatchmakingStyle, Population, run_round_with_policies
 
 
 @dataclass
@@ -28,6 +28,7 @@ class LeagueConfig:
     player_count: int = 4
     deals_per_match: int = 5
     rounds_per_generation: int = 3
+    matchmaking_style: MatchmakingStyle = "random"  # "random" | "elo"
     # PPO fine-tuning (optional; 0 disables)
     ppo_top_k: int = 0
     ppo_updates_per_agent: int = 0
@@ -67,6 +68,7 @@ def _run_tournament_rounds(
             num_deals=cfg.deals_per_match,
             rng=rng,
             make_policy=make_policy,
+            matchmaking_style=cfg.matchmaking_style,
         )
 
 

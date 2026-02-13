@@ -7,6 +7,7 @@ from tarot.tournament import (
     Population,
     update_elo_pairwise,
     make_random_tables,
+    make_elo_stratified_tables,
     run_random_match_4p,
     run_round_random,
     run_match_for_table,
@@ -40,6 +41,20 @@ def test_make_random_tables_size_and_partition():
     # No duplicates across tables
     flat = [x for t in tables for x in t]
     assert len(set(flat)) == len(flat)
+
+
+def test_make_elo_stratified_tables():
+    rng = random.Random(1)
+    pop = Population()
+    for i, elo in enumerate([1200.0, 1400.0, 1600.0, 1800.0, 1300.0, 1500.0]):
+        pop.add(Agent(id=f"A{i}", name=f"A{i}", player_counts=[4], elo_global=elo))
+    tables = make_elo_stratified_tables(pop, table_size=2, rng=rng)
+    # 6 agents, table_size 2 -> 3 tables
+    assert len(tables) == 3
+    assert all(len(t) == 2 for t in tables)
+    # First table should have lowest-ELO pair (1200, 1300), last highest (1600, 1800)
+    assert tables[0] == ["A0", "A4"]  # 1200, 1300
+    assert tables[2] == ["A2", "A3"]  # 1600, 1800
 
 
 def test_run_random_match_and_round_update_stats_and_elo():
@@ -91,6 +106,13 @@ def test_run_round_with_policies_updates_stats_and_elo():
         return RandomAgent(seed=42)
 
     run_round_with_policies(pop, player_count=4, num_deals=1, rng=rng, make_policy=make_policy)
+    for agent in pop.agents.values():
+        assert agent.matches_played >= 0
+
+    run_round_with_policies(
+        pop, player_count=4, num_deals=1, rng=rng, make_policy=make_policy,
+        matchmaking_style="elo",
+    )
     for agent in pop.agents.values():
         assert agent.matches_played >= 0
 
