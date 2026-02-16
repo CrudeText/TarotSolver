@@ -309,10 +309,11 @@ repeated tournament rounds, optional PPO fine-tuning, and GA-based evolution.
 
 ## 8. Phase 6 — GUI (league-centric)
 
-- **Tech (decision):** **Desktop** application (e.g. PyQt, Tkinter, or Electron).
+- **Tech (decision):** **Desktop** application (PySide6).
+- **Layout (Option 4 — target viewport):** Designed for **1080p** (1920×1080). Window opens **fullscreen windowed** (maximized); minimum size 1920×1080. Fixed section heights so layout is consistent across displays; on WQHD and above the same layout scales (no stretch). League tab content height 1000px: Project 52px, Population 400px, arrow 14px, flow boxes (Tournament, Fitness, Mutation/Clone, Next Generation) 526px each, four equal-width boxes in one row.
 - **Top-level sections:**
   - **Dashboard:** Overview of current league, best agents, recent matches. **Run controls** (Start, Pause, Cancel) and **ELO metrics** live here, plus charts area.
-  - **League Parameters:** Configure population, league structure, GA parameters, and export. Descriptive charts (population + league insights) at bottom — between Population and League structure.
+  - **League Parameters:** Population (top), then a row of four boxes: **Tournament**, **Fitness**, **Mutation / Clone**, **Next Generation** (name; was "Next Gen"). Each box same width and height.
   - **Agents & Hall of Fame:** Browse agents, see generations, traits, ELOs.
   - **Custom Tables & Play:** Ad-hoc matches, spectate, play vs AI.
   - **Settings:** Compute, storage, defaults.
@@ -323,31 +324,26 @@ The **League Parameters** tab is organised into: **Population management**, **De
 
 **Run controls** (Start, Pause, Cancel) and **live ELO metrics** are in the **Dashboard** tab, together with the charts area (Phase 4). Export options remain in League Parameters.
 
-At the **bottom** of the League Parameters board: a row with **League structure | GA parameters | Export** (narrow column, left) and a **large descriptive charts area** (right). The charts area shows:
-- **Generation flow diagram:** Visual flow: Population → Tournament → Fitness → Elites + Parents → Mutation / Clone → Next Generation.
-- **GA visual:** Bars for Elite % (kept unchanged), Mutation % (probability of perturbing traits), and Mut. std (standard deviation of trait perturbation, with a bell-curve hint).
+At the **bottom** of the League Parameters board: a **single row of four equal-sized boxes** — **Tournament** | **Fitness** | **Mutation / Clone** | **Next Generation** — with descriptive charts and controls inside each.
+- **Fitness box:** Weights (global ELO, avg score) on one line; formula; **fitness graph** (fitness vs ELO) with **multiple curves** for avg_score = 0, 25, 50, 75, 100; legend as small **"Average Score"** table (colour + value). Elite % and bar; Selection checkbox.
+- **Mutation / Clone box:** Compact top rows (Mutation % param, Mut. % bar, Mut. std) then **Mutation distribution** graph (bell curve, Δ trait vs density) taking most of the height.
+- **Generation flow diagram** (if present): Population → Tournament → Fitness → Mutation/Clone → Next Gen.
 
 #### 8.1.1 Population management
 
-- **Population table:** Editable table listing agents or groups, with delete buttons per row.
-- **Population pie chart:** Small pie chart between the table and Tools, showing distribution by group, with "Total Agents" tally on the same row.
-- **Source options:**
-  - Generate from scratch (random parameters per individual).
-  - Import a saved population exported from a previous run.
-  - Build from a smaller base: select individuals (custom, Hall of Fame, or from previous runs), then augment using:
-    - Target size.
-    - Mutation parameters applied to the base selection.
-    - Cloned individuals from the base (exact copies, no mutation).
-- **Tools:** Buttons next to the table to add individuals (random, from selection with mutation/clone) or import. User can start from scratch or build incrementally.
-- **Per-group flag checkboxes** (with column header tooltips): **GA parent** — allow group as GA parent; **Fixed ELO** — ELO not updated after matches; **Clone only** — when GA parent, only clone; **Play in league** — include in tournament tables.
+- **Layout:** Tools row (Count, Add random, Import, Augment from selection, Clear selected) **above** the agent groups table, aligned with the table’s left edge. **Left:** pie chart, metric/count table, "Group by" dropdown. **Right:** agent groups table.
+- **Population table:** One row per **group**; columns: **Select** (checkbox for Augment/Clear selected), Expand, Color, GA parent, Fixed ELO, Clone only, Play in league, Group name, # agents, Source, ELO (min/mean/max), Actions (Delete). Row height 32px; Expand and Delete buttons fixed 52×20 for fit.
+- **Population pie chart:** Pie + metrics table (GA agents, Fixed ELO, Clone only, Play in league, Total) + "Group by" (Group name / GA status / Play in league). Sits to the **left** of the table.
+- **Tools:** Count spinbox, Add random, Import, Augment from selection (uses **checked** rows), Clear selected (removes checked groups), Clear (all). Selection is by row checkboxes, not table selection.
+- **Per-group flag checkboxes** (with column header tooltips): **GA parent**, **Fixed ELO**, **Clone only**, **Play in league** — as above.
 
-#### 8.1.2 League structure parameters
+#### 8.1.2 League structure parameters (Tournament box)
 
-- Player count per table (3 / 4 / 5).
-- Deals per match.
-- Matches per league generation.
-- League style: **ELO-based matchmaking** (stratify by ELO so similar-strength agents play together) or **random matchmaking** (shuffle agents into tables).
-- Optional: ELO parameters (K-factor, margin scaling, per-count weights).
+- **Categories (checkbox-controlled):**
+  - **Core** (always visible, no checkbox): **Rules** dropdown ("3 Players (FFT Rules)", "4 Players (FFT Rules)", "5 Players (FFT Rules)"), **Matchmaking** (ELO-based / Random), **Deals/match** and **Matches/gen** on one row each (pairs on same line).
+  - **ELO tuning** (checkbox, unchecked by default): ELO K-factor and ELO margin scale on one line. When unchecked, parameters stay visible but **greyed out**.
+  - **PPO fine-tuning** (checkbox, unchecked by default): PPO top-K and PPO updates/agent on one line. When unchecked, parameters **greyed out**.
+- Same pattern for **Fitness** (Weights always visible; **Selection** checkbox for Elite % + bar) and **Next Generation** (Generations always visible; **Export** checkbox — when unchecked, export options **greyed out**).
 
 #### 8.1.3 GA parameters
 
@@ -370,6 +366,7 @@ At the **bottom** of the League Parameters board: a row with **League structure 
 
 #### 8.1.5 Export
 
+- **Checkbox-controlled:** Export is toggled by a checkbox. When unchecked, Export when, Every N gens, Export what, and Export now are greyed out.
 - **When to export:**
   - Option: export at each generation.
   - Option: export every X generations.
@@ -379,6 +376,29 @@ At the **bottom** of the League Parameters board: a row with **League structure 
   - Selected agents (manual selection).
   - Filtered subset (by ELO range, fitness, generation, etc.).
 - Exported populations can be reimported as “Import from previous run” in Population management.
+
+#### 8.1.6 League Parameters — backend wiring status
+
+**Control → Backend mapping (League Parameters tab):**
+
+| Section | Control | Backend / Use | Status |
+|---------|---------|---------------|--------|
+| Project | New, Open, Save, Save As | project_save, project_load | Wired |
+| Project | Export JSON, Import JSON | project_export_json, project_import_json | Wired |
+| Population | Add random, Import, Augment, Clear | LeagueTabState.groups | Wired |
+| Tournament | Rules (3/4/5 players) | LeagueConfig.player_count | Wired |
+| Tournament | Matchmaking (ELO-based / Random) | LeagueConfig.matchmaking_style | Wired |
+| Tournament | Deals/match, Matches/gen | LeagueConfig.deals_per_match, rounds_per_generation | Wired |
+| Tournament | ELO tuning checkbox | When unchecked: defaults (K=32, margin=50). When checked: use spins | Wired |
+| Tournament | PPO fine-tuning checkbox | When unchecked: ppo_top_k=0, ppo_updates_per_agent=0 | Wired |
+| Fitness | Weight (global ELO), Weight (avg score) | LeagueConfig.fitness_weight_* | Wired |
+| Reproduction | Elite %, Mutated %, Cloned %, Mut. std, Trait prob | GAConfig | Wired |
+| Next Gen | Generations spin | run_league_generations(num_generations=...) | Run not wired yet |
+| Next Gen | Export checkbox | Greys params; used when run loop exports | Run not wired |
+| Next Gen | Export when / Export what | Auto-export during run loop | Run not wired |
+| Next Gen | Export now button | population_to_json (full population) | Wired |
+
+**TODOs:** Run controls (Start/Pause/Cancel) not connected; implement LeagueRunWorker. Export during run: respect Export checkbox and Export when/what in generation callback. Export now: always full population; Export what combo ignored. Checkbox state (ELO/PPO) not persisted in projects.
 
 ### 8.2 Agents & Hall of Fame
 
@@ -414,12 +434,36 @@ At the **bottom** of the League Parameters board: a row with **League structure 
 
 - **Compute:** default device, max concurrent PPO jobs.
 - **Storage:** checkpoint retention, replay logging level.
+- **Projects folder:** Base directory where all projects are stored (default: e.g. `D:/1 - Project Data/TarotSolver`). New projects are created as subdirectories here. Set in Settings tab.
 - **League defaults:** reusable presets for league configuration.
 - **UI:** theme, chart smoothing, refresh intervals.
 
-### 8.5 Project management & experiment tracking (planned)
+### 8.5 Project management & experiment tracking
 
-High-end features for saving, resuming, and analysing league runs.
+#### 8.5.0 File menu and New Project dialog
+
+- **File button:** Single "File" button in the Project bar (replaces separate New, Open, Save, Save As, Export JSON, Import JSON buttons). Opens a dropdown menu with:
+  - New Project → opens New Project dialog
+  - Open Project → opens same dialog (list existing, open selected)
+  - Save, Save As, Export JSON, Import JSON → same behavior as before
+- **New Project dialog:**
+  - Shows projects folder (read-only; configured in Settings).
+  - List of existing projects (subdirs containing `project.json`) in that folder. Double-click or select + Open to load.
+  - Project name input for creating a new project. Create button validates name, creates `{projects_folder}/{name}` if available, saves initial state, loads the project.
+  - Validation: reject empty/invalid names; reject names that already exist.
+
+#### Implementation status (Phase 1 — done)
+
+- **Project directory format:** Projects live under the configurable projects folder. Layout per project:
+  - `project.json` — groups, league config, GA config, generation index, last summary.
+  - `checkpoints/` — agent checkpoints (saved directly into project during league run).
+  - `logs/league_run.jsonl` — per-generation ELO metrics (JSON Lines).
+- **All paths relative** within the project directory.
+- **Export to single JSON:** For easy sharing; includes population, config, logs. Checkpoint paths stored as relative.
+- **GUI:** File menu (New Project, Open Project, Save, Save As, Export JSON, Import JSON) in League tab. New/Open use the New Project dialog with name input and existing projects list.
+- **Log persistence:** `run_league_generations` accepts `log_path` and appends each generation.
+- **Checkpoints:** League run accepts `checkpoint_base_dir`; PPO saves into project directory.
+- **No RNG reproducibility** in this phase.
 
 #### 8.5.1 Project save/load
 
@@ -442,11 +486,11 @@ High-end features for saving, resuming, and analysing league runs.
 
 #### 8.5.3 Log data persistence
 
-- **During league/training runs:** Append to a structured log (e.g. JSON Lines or SQLite):
-  - Per generation: ELO min/mean/max, fitness, agent count, timestamp.
-  - Per PPO update (if applicable): loss, policy_loss, value_loss, entropy.
-- **Stored in project:** Logs are either embedded in the project file or referenced by path within the project directory.
-- **Load for charts:** When opening a project, load log data to drive ELO-over-time, loss curves, and other graphs.
+- **During league/training runs:** Append to `logs/league_run.jsonl` (JSON Lines):
+  - Per generation: ELO min/mean/max, agent count, timestamp.
+  - `run_league_generations(log_path=...)` writes automatically.
+- **Stored in project:** Log file at `project_dir/logs/league_run.jsonl`.
+- **Load for charts:** `load_league_log(project_dir)` returns entries for ELO-over-time, etc.
 
 #### 8.5.4 Auto-save
 
@@ -518,13 +562,17 @@ High-end features for saving, resuming, and analysing league runs.
     - **Elites:** top fraction preserved unchanged each generation.
     - Parameters like elite fraction, tournament size, selection temperature exposed as config (GUI-tunable).
   - **Reproduction:**
-    - Children are created from one or two parents:
+    - Children are created from one parent (asexual; *two-parent crossover is a future enhancement*):
       - Copy architecture/checkpoint references.
       - Record `parents` and increment `generation`.
-      - **Mutate**:
-        - Traits (e.g. aggressiveness/defense sliders) via small random perturbations.
-        - Later: hyperparameters and, when integrated, model weights.
+      - **Mutate**: Traits (e.g. aggressiveness/defense sliders) via small random perturbations. *Optional: mutation bias (non-zero mean) is a future enhancement.*
+      - Later: hyperparameters and, when integrated, model weights.
+    - A fraction of offspring may be exact clones of elites (configurable).
     - A small **hall of fame** stores the best-ever agents (by global ELO/fitness) across generations for analysis and as potential fixed opponents.
+- **Future reproduction enhancements (optional):**
+    - **Mutation bias:** Non-zero mean for trait perturbation (e.g. bias toward higher/lower values).
+    - **Two-parent crossover:** Agent/agent reproduction with trait crossover from two parents.
+    - **Per-trait mutation controls:** Per-trait mutation probability or std.
 - **Matchmaking during GA:**
   - Multiple strategies are supported and selectable in the GUI:
     - **Random tables** at the very start (to quickly de-correlate and spread ELOs).
@@ -584,21 +632,46 @@ Once these are clear, Phase 1 can start; the rest can be decided as we reach eac
 7. ~~Phase 4 (RL training).~~ **Done.** Custom PyTorch PPO trainer, checkpointing, `tarot train-ppo-4p` / `tarot eval-4p`, `NNPolicy` loader.
 8. ~~Phase 5 (tournaments + league + GA).~~ **Done (backend).** `run_round_with_policies`, GA helpers, `run_league_generation`, `tarot league-4p` CLI with JSON logs.
 9. **Phase 6 (GUI).**
-   - Current: PySide6 placeholder with tabs for Dashboard, League, Agents, Play, Settings.
+   - Current: PySide6 placeholder with tabs for Dashboard, League Parameters, Agents, Play, Settings. **League Parameters** tab:
+     - **Option 4 layout:** Target 1080p; min window 1920×1080; fullscreen windowed (maximized). Fixed heights: Project 52, Population 400, arrow 14, four flow boxes 526px each.
+     - Population: tools row above table; pie + metrics + Group by on left; agent groups table with Select checkbox column, Expand/Delete buttons 52×20, row height 32.
+     - Tournament: Rules ("N Players (FFT Rules)"), Matchmaking; Core always visible; ELO tuning and PPO fine-tuning with checkboxes (params greyed when unchecked).
+     - Fitness: weights on one line; formula; multi-curve fitness graph with "Average Score" table legend; Selection checkbox.
+     - Mutation/Clone: compact param rows, mutation distribution graph; Next Generation: Generations, Export checkbox (params greyed when unchecked).
    - Next GUI tasks:
      - Wire League tab to load and visualise `runs/league_*/generation_*.json`.
      - Implement basic Agents list from league logs plus Hall-of-Fame view.
      - Add a simple Play flow using existing engine/env policies (e.g. run one match, show textual summary).
 10. **Project management & experiment tracking (§8.5).**
-    - Planned features (in implementation order):
-      - Project save/load with save-as (§8.5.1).
-      - Log data persistence and chart loading (§8.5.3).
-      - Resume training (§8.5.2).
-      - Auto-save with configurable interval and retention (§8.5.4).
-      - Experiment comparison (§8.5.5).
-      - Agent lineage and history browser (§8.5.6).
-      - Run report included in project files (§8.5.7).
+    - Done: Project save/load (directory + export to JSON), log persistence, GUI actions.
+    - Planned: Resume training (§8.5.2), auto-save (§8.5.4), experiment comparison (§8.5.5), agent lineage (§8.5.6), run report (§8.5.7).
+
+### Dashboard — next session ideas
+
+Planned work for the Dashboard tab (see §8.1.4 Run controls and live metrics). Suggested order:
+
+1. **Run controls wiring (highest priority)**
+   - Implement `LeagueRunWorker` (QThread / QRunnable) to run `run_league_generations()` off the main thread.
+   - Connect Start / Pause / Cancel to worker. Use `LeagueRunControl` for Cancel; Pause = stop iterating after current generation.
+   - Emit signal per generation `(generation_index, population, summary)` → update state, save project, append log, refresh UI.
+   - Require loaded project before Start is enabled.
+2. **Live metrics**
+   - Expand ELO display: min / mean / max (already present), add Gen X/Y, N agents.
+   - Status line: Idle, Running, Paused, Completed.
+   - Fixed layout for 1080p (compact run section, charts area below).
+3. **Charts**
+   - **ELO evolution:** X = generation, Y = ELO; plot min/mean/max curves from `load_league_log(project_dir)`. Update live during run.
+   - **Fitness over generations:** requires extending log with fitness_min/mean/max per generation.
+   - **Diversity:** ELO spread (max−min) or trait variance; may need log extension.
+4. **Ranking table**
+   - Top agents: rank, name, generation, global ELO, ELO 3p/4p/5p, fitness, matches, avg score.
+   - Sort by ELO descending. Data from `state.build_population()`.
+5. **Overview**
+   - Summary: project name, generations completed, population size, best ELO, best agent.
+   - Recent matches (later): requires match-result persistence.
+
+**Data:** `load_league_log()` gives per-generation `elo_min/mean/max`, `num_agents`, `timestamp`. Agents have `elo_global`, `matches_played`, `total_match_score`, `generation`, etc.
 
 ---
 
-*Document version: 1.5 — Added §8.5 Project management & experiment tracking (save/load, resume, logs, auto-save, experiment comparison, agent lineage, run report).*
+*Document version: 1.11 — League Parameters backend wiring status (§8.1.6): control→backend mapping table, ELO/PPO checkbox semantics, TODOs.*

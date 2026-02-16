@@ -14,18 +14,34 @@ from typing import Optional
 from PySide6 import QtCore, QtWidgets
 
 from .league_tab import LeagueTabState, LeagueTabWidget, RunSectionWidget, make_league_tab
-from .themes import DARK, LIGHT, apply_theme, get_saved_theme, save_theme
+from .themes import (
+    DARK,
+    LIGHT,
+    apply_theme,
+    get_projects_folder,
+    get_saved_theme,
+    save_projects_folder,
+    save_theme,
+)
+
+
+# Default project to open on startup. Set to a path to auto-open, or None to start with no project.
+DEFAULT_PROJECT_PATH = "D:/A - Project Data/TarotSolver/Test 1"
 
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Tarot Solver (Placeholder GUI)")
-        self.resize(1200, 800)
+        # Option 4: target 1080p; fullscreen windowed (maximized)
+        self.setMinimumSize(1920, 1080)
+        self.resize(1920, 1080)
 
         tabs = QtWidgets.QTabWidget()
 
         league_tab = make_league_tab()
+        if DEFAULT_PROJECT_PATH:
+            league_tab.open_project(DEFAULT_PROJECT_PATH)
         league_state = league_tab.state()
 
         tabs.addTab(self._make_dashboard_tab(league_state), "Dashboard")
@@ -108,6 +124,22 @@ class MainWindow(QtWidgets.QMainWindow):
         form_layout.addRow("Theme:", theme_combo)
         layout.addWidget(form_group)
 
+        storage_group = QtWidgets.QGroupBox("Storage")
+        storage_layout = QtWidgets.QFormLayout(storage_group)
+        projects_row = QtWidgets.QHBoxLayout()
+        self._edit_projects_folder = QtWidgets.QLineEdit()
+        self._edit_projects_folder.setText(get_projects_folder())
+        self._edit_projects_folder.setPlaceholderText("Path to projects directory")
+        projects_row.addWidget(self._edit_projects_folder)
+        btn_browse = QtWidgets.QPushButton("Browse...")
+        btn_browse.clicked.connect(self._on_browse_projects_folder)
+        projects_row.addWidget(btn_browse)
+        storage_layout.addRow("Projects folder:", projects_row)
+        btn_apply_projects = QtWidgets.QPushButton("Apply")
+        btn_apply_projects.clicked.connect(self._on_apply_projects_folder)
+        storage_layout.addRow("", btn_apply_projects)
+        layout.addWidget(storage_group)
+
         other_group = QtWidgets.QGroupBox("Other (placeholder)")
         other_layout = QtWidgets.QFormLayout(other_group)
         other_layout.addRow("Default device:", QtWidgets.QComboBox())
@@ -124,6 +156,21 @@ class MainWindow(QtWidgets.QMainWindow):
         if app:
             apply_theme(app, theme)
 
+    def _on_browse_projects_folder(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select projects folder", self._edit_projects_folder.text()
+        )
+        if path:
+            self._edit_projects_folder.setText(path)
+
+    def _on_apply_projects_folder(self) -> None:
+        path = self._edit_projects_folder.text().strip()
+        if path:
+            save_projects_folder(path)
+            QtWidgets.QMessageBox.information(
+                self, "Settings", "Projects folder updated."
+            )
+
 
 def main(argv: Optional[list[str]] = None) -> None:
     import sys
@@ -132,7 +179,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     theme = get_saved_theme()
     apply_theme(app, theme)
     win = MainWindow()
-    win.show()
+    win.showMaximized()
     sys.exit(app.exec())
 
 

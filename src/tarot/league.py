@@ -12,9 +12,12 @@ For multi-generation runs with pause/cancel support, use ``run_league_generation
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import random
 import threading
-from typing import Dict, Iterator, List, Tuple
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 from .ga import GAConfig, compute_fitness, next_generation
 from .policies import policy_for_agent
@@ -29,6 +32,9 @@ class LeagueConfig:
     deals_per_match: int = 5
     rounds_per_generation: int = 3
     matchmaking_style: MatchmakingStyle = "random"  # "random" | "elo"
+    # ELO update parameters
+    elo_k_factor: float = 32.0
+    elo_margin_scale: float = 50.0
     # PPO fine-tuning (optional; 0 disables)
     ppo_top_k: int = 0
     ppo_updates_per_agent: int = 0
@@ -69,6 +75,8 @@ def _run_tournament_rounds(
             rng=rng,
             make_policy=make_policy,
             matchmaking_style=cfg.matchmaking_style,
+            k_factor=cfg.elo_k_factor,
+            margin_scale=cfg.elo_margin_scale,
         )
 
 
@@ -76,6 +84,8 @@ def _ppo_finetune_top_agents(
     pop: Population,
     cfg: LeagueConfig,
     rng: random.Random,
+    *,
+    checkpoint_base_dir: Optional[str] = None,
 ) -> None:
     """
     Optional local PPO refinement for the top-K agents by fitness.
@@ -123,8 +133,8 @@ def _ppo_finetune_top_agents(
             trainer.update()
 
         # Save updated checkpoint to a per-agent directory and point agent to it.
-        # For now we use a simple naming scheme; GUI/CLI can manage directories later.
-        ckpt_dir = f"checkpoints/league_4p_agent_{agent.id}"
+        base = checkpoint_base_dir or "checkpoints"
+        ckpt_dir = f"{base}/league_4p_agent_{agent.id}"
         trainer.save_checkpoint(ckpt_dir)
         agent.checkpoint_path = ckpt_dir
 
@@ -133,6 +143,8 @@ def run_league_generation(
     pop: Population,
     cfg: LeagueConfig,
     rng: random.Random | None = None,
+    *,
+    checkpoint_base_dir: Optional[str] = None,
 ) -> Tuple[Population, Dict[str, float]]:
     """
     Run one league "generation" on the given population.
@@ -152,7 +164,7 @@ def run_league_generation(
     _run_tournament_rounds(pop, cfg, rng)
 
     # 2) Optional PPO fine-tuning
-    _ppo_finetune_top_agents(pop, cfg, rng)
+    _ppo_finetune_top_agents(pop, cfg, rng, checkpoint_base_dir=checkpoint_base_dir)
 
     # Compute simple summary metrics on the current population
     elos = [a.elo_global for a in pop.agents.values()]
@@ -194,6 +206,10 @@ def run_league_generations(
     num_generations: int,
     rng: random.Random | None = None,
     control: LeagueRunControl | None = None,
+    *,
+    checkpoint_base_dir: Optional[str] = None,
+    log_path: Optional[Path | str] = None,
+    on_generation: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Iterator[Tuple[Population, Dict[str, float], int]]:
     """
     Run multiple league generations, yielding after each one.
@@ -209,6 +225,9 @@ def run_league_generations(
         num_generations: Number of generations to run.
         rng: Random generator.
         control: Optional control for cancel signalling.
+        checkpoint_base_dir: Base directory for PPO checkpoints (e.g. project/checkpoints).
+        log_path: If set, append JSONL log entries after each generation.
+        on_generation: Optional callable(gen_idx, summary) called after each generation.
 
     Yields:
         (population, summary_dict, generation_index) for each completed generation.
@@ -220,9 +239,27 @@ def run_league_generations(
         if control and control.cancel_requested.is_set():
             return
 
-        new_pop, summary = run_league_generation(current_pop, cfg, rng=rng)
+        new_pop, summary = run_league_generation(
+            current_pop, cfg, rng=rng, checkpoint_base_dir=checkpoint_base_dir
+        )
         yield new_pop, summary, gen_idx
         current_pop = new_pop
+
+        if log_path:
+            entry = {
+                "generation_index": gen_idx,
+                "elo_min": summary.get("elo_min", 0),
+                "elo_mean": summary.get("elo_mean", 0),
+                "elo_max": summary.get("elo_max", 0),
+                "num_agents": summary.get("num_agents", 0),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            p = Path(log_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with p.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        if on_generation is not None:
+            on_generation(gen_idx, summary)
 
 
 __all__ = ["LeagueConfig", "LeagueRunControl", "run_league_generation", "run_league_generations"]

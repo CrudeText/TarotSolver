@@ -372,6 +372,8 @@ def run_round_with_policies(
     make_policy: Callable[[Agent], Policy],
     *,
     matchmaking_style: MatchmakingStyle = "random",
+    k_factor: float = 32.0,
+    margin_scale: float = 50.0,
 ) -> None:
     """
     Run one tournament round using a per-Agent policy factory.
@@ -396,7 +398,10 @@ def run_round_with_policies(
         totals = run_match_for_table(player_count, num_deals, policies, rng)
         for agent, score in zip(table_agents, totals):
             agent.record_match_score(score)
-        update_elo_pairwise(table_agents, totals, player_count=player_count)
+        update_elo_pairwise(
+            table_agents, totals, player_count=player_count,
+            k_factor=k_factor, margin_scale=margin_scale,
+        )
 
 
 __all__ = [

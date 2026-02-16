@@ -19,6 +19,7 @@ from .tournament import Agent, AgentId, Population
 class GAConfig:
     population_size: int
     elite_fraction: float = 0.1
+    elite_clone_fraction: float = 0.0  # fraction of offspring slots filled by cloning elites
     mutation_prob: float = 0.5
     mutation_std: float = 0.1  # for traits in [0, 1]
 
@@ -176,7 +177,41 @@ def next_generation(
     if remaining <= 0:
         return new_pop
 
-    parents = _roulette_select(scored, remaining, rng)
+    clone_fraction = max(0.0, min(1.0, cfg.elite_clone_fraction))
+    clone_slots = int(remaining * clone_fraction)
+    mutate_slots = remaining - clone_slots
+
+    clone_counter = 0
+    for _ in range(clone_slots):
+        parent = rng.choice(elites)
+        new_id = f"{parent.id}-clone{clone_counter}"
+        while new_id in pop.agents or new_id in new_pop.agents:
+            clone_counter += 1
+            new_id = f"{parent.id}-clone{clone_counter}"
+        clone_counter += 1
+        clone = Agent(
+            id=new_id,
+            name=parent.name,
+            player_counts=list(parent.player_counts),
+            elo_3p=parent.elo_3p,
+            elo_4p=parent.elo_4p,
+            elo_5p=parent.elo_5p,
+            elo_global=parent.elo_global,
+            generation=parent.generation,
+            traits=dict(parent.traits),
+            checkpoint_path=parent.checkpoint_path,
+            arch_name=parent.arch_name,
+            parents=list(parent.parents),
+            can_use_as_ga_parent=parent.can_use_as_ga_parent,
+            fixed_elo=parent.fixed_elo,
+            clone_only=parent.clone_only,
+            play_in_league=parent.play_in_league,
+            matches_played=0,
+            total_match_score=0.0,
+        )
+        new_pop.add(clone)
+
+    parents = _roulette_select(scored, mutate_slots, rng)
     child_counts: Dict[AgentId, int] = {}
     for parent in parents:
         count = child_counts.get(parent.id, 0) + 1

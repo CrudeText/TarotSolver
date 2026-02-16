@@ -86,3 +86,27 @@ def test_can_use_as_ga_parent_excludes_reference_agents():
         if aid != "ref":
             assert "ref" not in agent.parents
 
+
+def test_elite_clone_fraction():
+    """With elite_clone_fraction > 0, some offspring slots are filled by cloning elites."""
+    pop = _make_dummy_population()
+    cfg = GAConfig(
+        population_size=4,
+        elite_fraction=0.25,
+        elite_clone_fraction=0.5,  # half of offspring slots = clones
+        mutation_prob=0.0,
+        mutation_std=0.0,
+    )
+    rng = random.Random(999)
+
+    new_pop = next_generation(pop, cfg, rng=rng, fitness_fn=compute_fitness)
+    assert len(new_pop.agents) == 4
+
+    # Elite A3 (highest ELO) should be kept
+    assert "A3" in new_pop.agents
+    # Some children should be clones (parent-id-cloneN)
+    clone_ids = [aid for aid in new_pop.all_ids() if "-clone" in aid]
+    mutate_ids = [aid for aid in new_pop.all_ids() if "-c" in aid and "-clone" not in aid]
+    assert len(clone_ids) >= 1
+    assert len(clone_ids) + len(mutate_ids) == 3  # 3 offspring slots
+
