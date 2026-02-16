@@ -318,15 +318,16 @@ class GenerationFlowWidget(QtWidgets.QWidget):
 
 
 class ReproductionBarWidget(QtWidgets.QWidget):
-    """Visual bar: red=mutant offspring, green=elite kept, purple=clone offspring."""
+    """Visual bar: red=eliminated, green=mutated, purple=cloned. Uses counts from league_tab so bar and insights match."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(56)
         self._elite_pct = 90.0
         self._clone_pct = 10.0
-        self._mut_pct = 80.0  # elite = mutated + cloned
+        self._mut_pct = 80.0
         self._total_agents = 0
+        self._counts: tuple[int, int, int] | None = None  # (elim_n, mut_n, clone_n) when set from league_tab
 
     def set_params(
         self,
@@ -334,11 +335,13 @@ class ReproductionBarWidget(QtWidgets.QWidget):
         clone_pct: float,
         mut_pct: float,
         total_agents: int = 0,
+        counts: tuple[int, int, int] | None = None,
     ) -> None:
         self._elite_pct = elite_pct
         self._clone_pct = max(0.0, min(100.0, clone_pct))
         self._mut_pct = max(0.0, min(100.0, mut_pct))
         self._total_agents = total_agents
+        self._counts = counts  # (elim_n, mut_n, clone_n) — same source as "Elite count / Clone slots / Mutate slots"
         self.update()
 
     def paintEvent(self, event: QtCore.QEvent) -> None:
@@ -354,47 +357,18 @@ class ReproductionBarWidget(QtWidgets.QWidget):
             bar_h = 14
             y = 4
             painter.drawText(4, y + 12, "Selection")
-            # Left to right: red (eliminated) | green (mutated) | purple (cloned)
-            elim = 1.0 - (self._elite_pct / 100.0)
-            m = self._mut_pct / 100.0
-            c = self._clone_pct / 100.0
             total = self._total_agents
-            # Round counts so they sum to total (largest remainder)
-            def _rounded_counts(fracs: list[float], n: int) -> list[int]:
-                if n <= 0:
-                    return [0] * len(fracs)
-                floats = [f * n for f in fracs]
-                ints = [int(f) for f in floats]
-                remainder = n - sum(ints)
-                if remainder > 0:
-                    # Add 1 to cells with largest fractional part
-                    fracs_sorted = sorted(
-                        enumerate(floats),
-                        key=lambda i_f: i_f[1] - int(i_f[1]),
-                        reverse=True,
-                    )
-                    for i in range(remainder):
-                        ints[fracs_sorted[i][0]] += 1
-                elif remainder < 0:
-                    # Subtract 1 from cells with smallest fractional part
-                    fracs_sorted = sorted(
-                        enumerate(floats),
-                        key=lambda i_f: i_f[1] - int(i_f[1]),
-                    )
-                    for i in range(-remainder):
-                        idx = fracs_sorted[i][0]
-                        if ints[idx] > 0:
-                            ints[idx] -= 1
-                return ints
-
-            counts = _rounded_counts([elim, m, c], total)
-            elim_n, mut_n, clone_n = counts[0], counts[1], counts[2]
+            if self._counts is not None and total > 0:
+                elim_n, mut_n, clone_n = self._counts
+            else:
+                elim_n = mut_n = clone_n = 0
+            # Segment widths proportional to counts so bar matches numbers
             x = bar_x
             font = painter.font()
             font.setPointSize(7)
             painter.setFont(font)
-            if elim > 0.001:
-                rw = max(2, int(bar_w * elim))
+            if total > 0 and elim_n > 0:
+                rw = max(2, int(bar_w * elim_n / total))
                 painter.setBrush(QtGui.QBrush(_rgb(0xD9534F)))
                 painter.drawRect(int(x), y, rw, bar_h)
                 painter.setPen(QtGui.QPen(_rgb(0xffffff), 1))
@@ -405,8 +379,8 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 )
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 x += rw
-            if m > 0.001:
-                mw = max(2, int(bar_w * m))
+            if total > 0 and mut_n > 0:
+                mw = max(2, int(bar_w * mut_n / total))
                 painter.setBrush(QtGui.QBrush(_rgb(0x50C878)))
                 painter.drawRect(int(x), y, mw, bar_h)
                 painter.setPen(QtGui.QPen(_rgb(0xffffff), 1))
@@ -417,8 +391,8 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 )
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 x += mw
-            if c > 0.001:
-                cw = max(4, int(bar_w * c))
+            if total > 0 and clone_n > 0:
+                cw = max(4, int(bar_w * clone_n / total))
                 painter.setBrush(QtGui.QBrush(_rgb(0xBB66FF)))
                 painter.drawRect(int(x), y, cw, bar_h)
                 painter.setPen(QtGui.QPen(_rgb(0xffffff), 1))
@@ -429,11 +403,11 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 )
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 x += cw
-            # Fill any tiny gap with grey
             if x < bar_x + bar_w - 1:
                 painter.setBrush(QtGui.QBrush(_rgb(0x404040)))
                 painter.drawRect(int(x), y, int(bar_x + bar_w - x), bar_h)
-            painter.drawText(bar_x + bar_w + 6, y + 12, f"{self._elite_pct:.0f}%")
+            pct = (100.0 * (mut_n + clone_n) / total) if total > 0 else 0
+            painter.drawText(bar_x + bar_w + 6, y + 12, f"{pct:.0f}%")
             # Color legend
             font = painter.font()
             font.setPointSize(8)

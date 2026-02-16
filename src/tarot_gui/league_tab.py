@@ -801,7 +801,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_elite.setSuffix(" %")
         self._spin_elite.setDecimals(1)
         self._spin_elite.setMinimumWidth(72)
-        self._spin_elite.valueChanged.connect(self._on_repro_params_changed)
+        self._spin_elite.valueChanged.connect(self._on_elite_changed)
         lbl_clone = QtWidgets.QLabel("Cloned:")
         lbl_clone.setToolTip("Fraction of population filled by cloning elites.")
         self._spin_clone = QtWidgets.QDoubleSpinBox()
@@ -810,7 +810,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_clone.setSuffix(" %")
         self._spin_clone.setDecimals(1)
         self._spin_clone.setMinimumWidth(72)
-        self._spin_clone.valueChanged.connect(self._on_repro_params_changed)
+        self._spin_clone.valueChanged.connect(self._on_clone_changed)
         lbl_mut_pct = QtWidgets.QLabel("Mutated:")
         lbl_mut_pct.setToolTip("Fraction of population filled by mutated offspring.")
         self._spin_mut_prob = QtWidgets.QDoubleSpinBox()
@@ -819,7 +819,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_mut_prob.setSuffix(" %")
         self._spin_mut_prob.setDecimals(1)
         self._spin_mut_prob.setMinimumWidth(72)
-        self._spin_mut_prob.valueChanged.connect(self._on_repro_params_changed)
+        self._spin_mut_prob.valueChanged.connect(self._on_mutated_changed)
         params_row.addWidget(lbl_elite)
         params_row.addWidget(self._spin_elite)
         params_row.addSpacing(16)
@@ -1021,38 +1021,51 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 if item:
                     item.setText(str(val))
 
-    def _on_repro_params_changed(self) -> None:
-        """Enforce Elite = Mutated + Cloned. When Clone changes, adjust Mutated to keep Elite. Same for Mutated."""
+    def _on_elite_changed(self) -> None:
+        """User changed Elite. Enforce Elite = Mutated + Cloned by adjusting Mutated (keep Clone)."""
         e = self._spin_elite.value()
         c = self._spin_clone.value()
-        m = self._spin_mut_prob.value()
-        for spin in (self._spin_elite, self._spin_clone, self._spin_mut_prob):
-            spin.blockSignals(True)
+        self._spin_mut_prob.blockSignals(True)
         try:
-            if abs((m + c) - e) < 0.01:
-                self._update_elites_insights()
-                self._update_ga_visual()
-                return
-            # Mutated + Cloned must equal Elite
-            if m + c > e:
-                # Need to reduce: take from Mutated first
-                self._spin_mut_prob.setValue(max(0, e - c))
-            else:
-                # Need to increase: add to Mutated
-                self._spin_mut_prob.setValue(min(e, e - c))
+            self._spin_mut_prob.setValue(max(0, min(e, e - c)))
         finally:
-            for spin in (self._spin_elite, self._spin_clone, self._spin_mut_prob):
-                spin.blockSignals(False)
+            self._spin_mut_prob.blockSignals(False)
+        self._update_elites_insights()
+        self._update_ga_visual()
+
+    def _on_clone_changed(self) -> None:
+        """User changed Clone. Enforce Elite = Mutated + Cloned by adjusting Mutated."""
+        e = self._spin_elite.value()
+        c = self._spin_clone.value()
+        self._spin_mut_prob.blockSignals(True)
+        try:
+            self._spin_mut_prob.setValue(max(0, min(e, e - c)))
+        finally:
+            self._spin_mut_prob.blockSignals(False)
+        self._update_elites_insights()
+        self._update_ga_visual()
+
+    def _on_mutated_changed(self) -> None:
+        """User changed Mutated. Enforce Elite = Mutated + Cloned by adjusting Clone."""
+        e = self._spin_elite.value()
+        m = self._spin_mut_prob.value()
+        self._spin_clone.blockSignals(True)
+        try:
+            self._spin_clone.setValue(max(0, min(e, e - m)))
+        finally:
+            self._spin_clone.blockSignals(False)
         self._update_elites_insights()
         self._update_ga_visual()
 
     def _update_ga_visual(self) -> None:
-        ga_eligible = sum(1 for g in self._state.groups for a in g.agents if a.can_use_as_ga_parent)
+        slots, kept_count, clone_slots, mutate_slots = self._get_repro_counts()
+        elim_count = slots - kept_count
         self._reproduction_bar_widget.set_params(
             self._spin_elite.value(),
             self._spin_clone.value(),
             self._spin_mut_prob.value(),
-            total_agents=ga_eligible,
+            total_agents=slots,
+            counts=(elim_count, mutate_slots, clone_slots),
         )
         self._mut_dist_widget.set_mutation_std(self._spin_mut_std.value())
 
@@ -1102,18 +1115,22 @@ class LeagueTabWidget(QtWidgets.QWidget):
         )
         self._fitness_visual.set_params(w_elo, w_score)
 
-    def _update_elites_insights(self) -> None:
+    def _get_repro_counts(self) -> tuple[int, int, int, int]:
+        """Return (slots, kept_count, clone_slots, mutate_slots) using the same formula as GA. Used by bar and insights."""
         total = self._state.total_agents()
         ga_eligible = sum(1 for g in self._state.groups for a in g.agents if a.can_use_as_ga_parent)
         ref = total - ga_eligible
         slots = max(0, total - ref)
         elite_pct = self._spin_elite.value() / 100
         clone_pct = self._spin_clone.value() / 100
-        mut_pct = self._spin_mut_prob.value() / 100
         kept_count = max(1, int(slots * (1 - elite_pct))) if slots > 0 else 0
         offspring_slots = slots - kept_count
         clone_slots = int(offspring_slots * clone_pct / elite_pct) if elite_pct > 0 else 0
         mutate_slots = max(0, offspring_slots - clone_slots)
+        return slots, kept_count, clone_slots, mutate_slots
+
+    def _update_elites_insights(self) -> None:
+        _, kept_count, clone_slots, mutate_slots = self._get_repro_counts()
         self._elites_insights.setText(
             f"Elite count: {kept_count}  Clone slots: {clone_slots}  Mutate slots: {mutate_slots}"
         )
@@ -1513,7 +1530,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
                     spin.blockSignals(False)
             self._spin_trait_prob.setValue(cfg.ga_config.mutation_prob * 100)
             self._spin_mut_std.setValue(cfg.ga_config.mutation_std)
-            self._on_repro_params_changed()
+            self._update_elites_insights()
+            self._update_ga_visual()
 
     def _update_project_label(self) -> None:
         p = self._state.project_path
