@@ -14,9 +14,9 @@ Tarot Solver is a Python project for **playing, simulating and training agents**
 | **RL training** | ✅ Complete — Custom PPO, checkpointing, `tarot train-ppo-4p` |
 | **Tournaments & league** | ✅ Complete — ELO, GA, `run_league_generation`, `tarot league-4p` |
 | **Population persistence** | ✅ Complete — Import/export, augmentation helpers |
-| **Desktop GUI** | 🚧 In progress — League tab functional (groups, population tools); other tabs placeholder |
+| **Desktop GUI** | 🚧 In progress — League tab (groups, config, export); Dashboard run controls (Start/Pause/Cancel, LeagueRunWorker); Agents, Play, Settings placeholder |
 
-**Planned:** Wire League tab to run training, add export, live metrics and charts; then Agents, Play vs AI, and spectate.
+**Planned:** Dashboard live metrics and charts, export during run; then Agents, Play vs AI, and spectate.
 
 ---
 
@@ -91,8 +91,9 @@ See the API for `play_one_deal_4p`, `run_match_4p`, `run_league_generation`, etc
 
 ### GUI
 
-- **League** — Build populations as groups (Add random, Import, Augment, Clear), expand groups to edit agents, configure league structure and GA (forms not yet wired).
-- **Dashboard, Agents, Play, Settings** — Placeholders for later phases.
+- **League** — Build populations as groups (Add random, Import, Augment, Clear), expand groups to edit agents, configure league structure and GA. Export now saves full population.
+- **Dashboard** — Run controls (Start, Pause at next generation, Cancel); ELO min/mean/max; project required to start. Charts and ranking table planned.
+- **Agents, Play, Settings** — Placeholders for later phases.
 
 ---
 

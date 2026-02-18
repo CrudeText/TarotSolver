@@ -318,7 +318,7 @@ class GenerationFlowWidget(QtWidgets.QWidget):
 
 
 class ReproductionBarWidget(QtWidgets.QWidget):
-    """Visual bar: red=eliminated, green=mutated, purple=cloned. Uses counts from league_tab so bar and insights match."""
+    """Visual bar: eliminated (left), mutated, cloned. Elite = mutated + cloned (the rest)."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -327,7 +327,7 @@ class ReproductionBarWidget(QtWidgets.QWidget):
         self._clone_pct = 10.0
         self._mut_pct = 80.0
         self._total_agents = 0
-        self._counts: tuple[int, int, int] | None = None  # (elim_n, mut_n, clone_n) when set from league_tab
+        self._counts: tuple[int, int, int] | None = None  # (eliminated_n, mut_n, clone_n)
 
     def set_params(
         self,
@@ -341,7 +341,7 @@ class ReproductionBarWidget(QtWidgets.QWidget):
         self._clone_pct = max(0.0, min(100.0, clone_pct))
         self._mut_pct = max(0.0, min(100.0, mut_pct))
         self._total_agents = total_agents
-        self._counts = counts  # (elim_n, mut_n, clone_n) — same source as "Elite count / Clone slots / Mutate slots"
+        self._counts = counts  # (eliminated, mutated, cloned); sum = total_agents
         self.update()
 
     def paintEvent(self, event: QtCore.QEvent) -> None:
@@ -357,17 +357,19 @@ class ReproductionBarWidget(QtWidgets.QWidget):
             bar_h = 14
             y = 4
             painter.drawText(4, y + 12, "Selection")
-            total = self._total_agents
+            total = self._total_agents  # bar total is always total agents (slots)
             if self._counts is not None and total > 0:
                 elim_n, mut_n, clone_n = self._counts
             else:
                 elim_n = mut_n = clone_n = 0
-            # Segment widths proportional to counts so bar matches numbers
+            # Segment widths: Eliminated + Mutated + Cloned = total (always)
+            if total <= 0:
+                total = 1
             x = bar_x
             font = painter.font()
             font.setPointSize(7)
             painter.setFont(font)
-            if total > 0 and elim_n > 0:
+            if elim_n > 0:
                 rw = max(2, int(bar_w * elim_n / total))
                 painter.setBrush(QtGui.QBrush(_rgb(0xD9534F)))
                 painter.drawRect(int(x), y, rw, bar_h)
@@ -379,7 +381,7 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 )
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 x += rw
-            if total > 0 and mut_n > 0:
+            if mut_n > 0:
                 mw = max(2, int(bar_w * mut_n / total))
                 painter.setBrush(QtGui.QBrush(_rgb(0x50C878)))
                 painter.drawRect(int(x), y, mw, bar_h)
@@ -391,8 +393,8 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 )
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 x += mw
-            if total > 0 and clone_n > 0:
-                cw = max(4, int(bar_w * clone_n / total))
+            if clone_n > 0:
+                cw = max(2, int(bar_w * clone_n / total))
                 painter.setBrush(QtGui.QBrush(_rgb(0xBB66FF)))
                 painter.drawRect(int(x), y, cw, bar_h)
                 painter.setPen(QtGui.QPen(_rgb(0xffffff), 1))
@@ -406,9 +408,12 @@ class ReproductionBarWidget(QtWidgets.QWidget):
             if x < bar_x + bar_w - 1:
                 painter.setBrush(QtGui.QBrush(_rgb(0x404040)))
                 painter.drawRect(int(x), y, int(bar_x + bar_w - x), bar_h)
-            pct = (100.0 * (mut_n + clone_n) / total) if total > 0 else 0
+            # Percentage of population that is elite (mutated + cloned refill)
+            slots = self._total_agents
+            elite_n = mut_n + clone_n
+            pct = (100.0 * elite_n / slots) if slots > 0 else 0
             painter.drawText(bar_x + bar_w + 6, y + 12, f"{pct:.0f}%")
-            # Color legend
+            # Color legend: eliminated (left), elite = mutated + cloned
             font = painter.font()
             font.setPointSize(8)
             painter.setFont(font)
@@ -418,7 +423,7 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 (0x50C878, "green: mutated"),
                 (0xBB66FF, "purple: cloned"),
             ]):
-                lx = bar_x + i * 90
+                lx = bar_x + i * 95
                 painter.setBrush(QtGui.QBrush(_rgb(color)))
                 painter.setPen(QtCore.Qt.PenStyle.NoPen)
                 painter.drawRect(int(lx), int(leg_y), 10, 10)

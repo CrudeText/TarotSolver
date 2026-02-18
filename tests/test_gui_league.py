@@ -15,6 +15,7 @@ from PySide6 import QtCore, QtWidgets
 from tarot.persistence import population_to_dict
 from tarot.tournament import Agent, Population
 from tarot_gui.league_tab import (
+    GROUP_NAMES,
     Group,
     GRP_COL_AGENTS,
     GRP_COL_CLONE_ONLY,
@@ -67,7 +68,10 @@ def test_add_random():
     assert len(tab.state().groups) == 1
     assert tab.state().total_agents() == 3
     g = tab.state().groups[0]
-    assert g.name == "Random 3"
+    # Group name is picked from GROUP_NAMES, with a fallback "Cohort <digits>" when exhausted.
+    in_group_names = g.name in GROUP_NAMES
+    is_cohort = g.name.startswith("Cohort ") and g.name[7:].isdigit()
+    assert in_group_names or is_cohort
     assert g.id.startswith("grp_rand_")
 
 

@@ -45,9 +45,10 @@ class _ResizeFilter(QtCore.QObject):
         if event.type() == QtCore.QEvent.Type.Resize:
             self._on_resize()
         return super().eventFilter(obj, event)
-from tarot.league import LeagueConfig
+from tarot.league import LeagueConfig, LeagueRunControl, run_league_generations
 from tarot.persistence import population_from_dict
 from tarot.population_helpers import clone_agents, generate_random_agents, mutate_from_base
+from tarot.project import get_checkpoint_base_dir, get_log_path
 from tarot.tournament import Agent, Population
 
 
@@ -374,8 +375,106 @@ class AugmentDialog(QtWidgets.QDialog):
         return self._spin_mut_std.value()
 
 
+def _population_to_single_group(pop: Population, generation_index: int) -> Group:
+    """Convert a flat Population from the league backend into one Group for the UI."""
+    agents = list(pop.agents.values())
+    return Group(
+        id="league_0",
+        name=f"League (gen {generation_index})",
+        agents=agents,
+        color=0x4A90D9,
+    )
+
+
+class LeagueRunWorker(QtCore.QThread):
+    """
+    Runs run_league_generations() in a background thread.
+    Emits generation_done(gen_idx, population, summary) after each generation,
+    and finished(cancelled, paused) when the run ends.
+    """
+
+    generation_done = QtCore.Signal(int, object, object)  # gen_idx, Population, summary dict
+    finished_run = QtCore.Signal(bool, bool)  # cancelled, paused
+
+    def __init__(
+        self,
+        pop: Population,
+        cfg: LeagueConfig,
+        num_generations: int,
+        project_path: str,
+        control: LeagueRunControl,
+        rng_seed: Optional[int] = None,
+        parent: Optional[QtCore.QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._pop = pop
+        self._cfg = cfg
+        self._num_generations = num_generations
+        self._project_path = project_path
+        self._control = control
+        self._rng_seed = rng_seed
+        self._pause_requested = False
+
+    def request_pause(self) -> None:
+        self._pause_requested = True
+
+    def run(self) -> None:
+        rng = random.Random(self._rng_seed)
+        log_path = get_log_path(self._project_path)
+        checkpoint_base_dir = str(get_checkpoint_base_dir(self._project_path))
+        cancelled = False
+        paused = False
+        try:
+            gen_iter = run_league_generations(
+                self._pop,
+                self._cfg,
+                num_generations=self._num_generations,
+                rng=rng,
+                control=self._control,
+                checkpoint_base_dir=checkpoint_base_dir,
+                log_path=str(log_path),
+            )
+            for new_pop, summary, gen_idx in gen_iter:
+                self.generation_done.emit(gen_idx, new_pop, summary)
+                if self._control.cancel_requested.is_set():
+                    cancelled = True
+                    break
+                if self._pause_requested:
+                    paused = True
+                    break
+        except Exception:
+            cancelled = True
+            raise
+        finally:
+            self.finished_run.emit(cancelled, paused)
+
+    def run_sync(self) -> None:
+        """Run in current thread (for tests). Does not emit signals in a queued way."""
+        rng = random.Random(self._rng_seed)
+        log_path = get_log_path(self._project_path)
+        checkpoint_base_dir = str(get_checkpoint_base_dir(self._project_path))
+        gen_iter = run_league_generations(
+            self._pop,
+            self._cfg,
+            num_generations=self._num_generations,
+            rng=rng,
+            control=self._control,
+            checkpoint_base_dir=checkpoint_base_dir,
+            log_path=str(log_path),
+        )
+        for new_pop, summary, gen_idx in gen_iter:
+            self.generation_done.emit(gen_idx, new_pop, summary)
+            if self._control.cancel_requested.is_set() or self._pause_requested:
+                break
+        self.finished_run.emit(self._control.cancel_requested.is_set(), self._pause_requested)
+
+
 class RunSectionWidget(QtWidgets.QWidget):
     """Run controls (Start, Pause, Cancel) and ELO metrics. Placed in Dashboard tab."""
+
+    start_clicked = QtCore.Signal()
+    pause_clicked = QtCore.Signal()
+    cancel_clicked = QtCore.Signal()
 
     def __init__(self, state: LeagueTabState, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -389,6 +488,9 @@ class RunSectionWidget(QtWidgets.QWidget):
         self._btn_cancel = QtWidgets.QPushButton("Cancel")
         self._btn_pause.setEnabled(False)
         self._btn_cancel.setEnabled(False)
+        self._btn_start.clicked.connect(self._on_start_clicked)
+        self._btn_pause.clicked.connect(self._on_pause_clicked)
+        self._btn_cancel.clicked.connect(self._on_cancel_clicked)
         buttons_row.addWidget(self._btn_start)
         buttons_row.addWidget(self._btn_pause)
         buttons_row.addWidget(self._btn_cancel)
@@ -409,9 +511,30 @@ class RunSectionWidget(QtWidgets.QWidget):
         charts_placeholder.setStyleSheet("QLabel#dashboardChartsPlaceholder { border: 1px solid #606060; }")
         layout.addWidget(charts_placeholder, stretch=1)
 
+    def _on_start_clicked(self) -> None:
+        self.start_clicked.emit()
+
+    def _on_pause_clicked(self) -> None:
+        self.pause_clicked.emit()
+
+    def _on_cancel_clicked(self) -> None:
+        self.cancel_clicked.emit()
+
+    def set_buttons_running(self, running: bool) -> None:
+        """Enable Pause/Cancel and disable Start when running; when idle, enable Start only if project loaded."""
+        self._btn_start.setEnabled(not running and bool(self._state.project_path))
+        self._btn_pause.setEnabled(running)
+        self._btn_cancel.setEnabled(running)
+
+    def update_start_enabled(self) -> None:
+        """Enable Start only when a project is loaded and not running (call when project or run state changes)."""
+        if not self._btn_pause.isEnabled():
+            self._btn_start.setEnabled(bool(self._state.project_path))
+
     def showEvent(self, event: QtCore.QEvent) -> None:
         super().showEvent(event)
         self.update_metrics()
+        self.update_start_enabled()
 
     def update_metrics(self) -> None:
         """Refresh ELO label from state."""
@@ -439,8 +562,14 @@ class LeagueTabWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._state = LeagueTabState()
         self._rng = random.Random()
+        self._update_league_content_size: Optional[callable] = None
         self._setup_ui()
         self._refresh_table()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if self._update_league_content_size is not None:
+            self._update_league_content_size()
 
     def _setup_ui(self) -> None:
         # Option 4: fixed layout for 1080p (1920×1080); scales to WQHD and above
@@ -451,12 +580,14 @@ class LeagueTabWidget(QtWidgets.QWidget):
         ARROW_HEIGHT = 14
         FLOW_BOX_HEIGHT = CONTENT_HEIGHT_1080P - _m - PROJECT_HEIGHT - POPULATION_HEIGHT - ARROW_HEIGHT  # 526
 
-        scroll = QtWidgets.QScrollArea()
+        self._scroll = QtWidgets.QScrollArea()
+        scroll = self._scroll
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
 
-        content = QtWidgets.QWidget()
+        self._league_content = QtWidgets.QWidget()
+        content = self._league_content
         content.setMinimumWidth(1920)
         content.setMinimumHeight(CONTENT_HEIGHT_1080P)
         layout = QtWidgets.QVBoxLayout(content)
@@ -467,10 +598,10 @@ class LeagueTabWidget(QtWidgets.QWidget):
         proj_layout = QtWidgets.QHBoxLayout(proj_group)
         self._label_project = QtWidgets.QLabel("No Project Loaded")
         self._label_project.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._label_project.setMinimumWidth(180)  # avoid cropping when narrow
         self._label_project.setStyleSheet(
             "font-size: 16px; font-weight: bold; color: #aaa; padding: 16px 0;"
         )
-        proj_layout.addWidget(self._label_project, stretch=1)
         # No-project buttons (visible when no project loaded)
         self._btns_no_project = QtWidgets.QWidget()
         no_proj_layout = QtWidgets.QHBoxLayout(self._btns_no_project)
@@ -481,7 +612,6 @@ class LeagueTabWidget(QtWidgets.QWidget):
         btn_open.clicked.connect(self._on_open_project)
         no_proj_layout.addWidget(btn_new)
         no_proj_layout.addWidget(btn_open)
-        proj_layout.addWidget(self._btns_no_project)
         # File button (visible only when project loaded)
         self._btn_file = QtWidgets.QPushButton("File")
         self._btn_file.setFixedWidth(80)
@@ -502,7 +632,12 @@ class LeagueTabWidget(QtWidgets.QWidget):
         act_import.triggered.connect(self._on_import_project_json)
         self._btn_file.setMenu(file_menu)
         self._btn_file.setVisible(False)
+        # Center label and buttons in the bar (stretch on both sides)
+        proj_layout.addStretch(1)
+        proj_layout.addWidget(self._label_project)
+        proj_layout.addWidget(self._btns_no_project)
         proj_layout.addWidget(self._btn_file)
+        proj_layout.addStretch(1)
         proj_group.setFixedHeight(PROJECT_HEIGHT)
         layout.addWidget(proj_group)
 
@@ -886,9 +1021,9 @@ class LeagueTabWidget(QtWidgets.QWidget):
         run_form = QtWidgets.QFormLayout()
         run_form.addRow(QtWidgets.QLabel("Generations:"), self._spin_generations)
         next_layout.addLayout(run_form)
-        # Export: checkbox (checked by default), params always visible but greyed when unchecked
+        # Export: checkbox (off by default), params always visible but greyed when unchecked
         self._cb_export = QtWidgets.QCheckBox("Export")
-        self._cb_export.setChecked(True)
+        self._cb_export.setChecked(False)
         self._cb_export.toggled.connect(self._update_next_gen_export_enabled)
         next_layout.addWidget(self._cb_export)
         self._next_export_frame = QtWidgets.QFrame()
@@ -942,14 +1077,25 @@ class LeagueTabWidget(QtWidgets.QWidget):
         layout.addStretch(1)
 
         scroll.setWidget(content)
-        # Fill viewport when taller than content so no grey strip at bottom
+        # Fill viewport when taller than content so no grey strip at bottom.
+        # When no project is loaded, lock content width to viewport so no horizontal scroll and text stays visible (gameplan §8).
         _min_content_h = CONTENT_HEIGHT_1080P
-        def _update_content_min_height():
-            vh = scroll.viewport().height()
+        _min_content_w_full = 1920
+        _max_width_unlimited = 100000  # effectively no max when project loaded
+        def _update_content_size():
+            vp = scroll.viewport()
+            vh, vw = vp.height(), max(vp.width(), 400)
             content.setMinimumHeight(max(_min_content_h, vh))
-        _update_content_min_height()
+            if self._state.project_path is None:
+                content.setMinimumWidth(vw)
+                content.setMaximumWidth(vw)
+            else:
+                content.setMinimumWidth(_min_content_w_full)
+                content.setMaximumWidth(_max_width_unlimited)
+        _update_content_size()
+        self._update_league_content_size = _update_content_size
         scroll.viewport().installEventFilter(
-            _ResizeFilter(scroll, lambda: _update_content_min_height())
+            _ResizeFilter(scroll, _update_content_size)
         )
 
         self._update_ga_visual()
@@ -1059,13 +1205,13 @@ class LeagueTabWidget(QtWidgets.QWidget):
 
     def _update_ga_visual(self) -> None:
         slots, kept_count, clone_slots, mutate_slots = self._get_repro_counts()
-        elim_count = slots - kept_count
+        # Bar: Eliminated (kept, not replaced) + Mutated + Cloned = slots (total agents)
         self._reproduction_bar_widget.set_params(
             self._spin_elite.value(),
             self._spin_clone.value(),
             self._spin_mut_prob.value(),
             total_agents=slots,
-            counts=(elim_count, mutate_slots, clone_slots),
+            counts=(kept_count, mutate_slots, clone_slots),  # eliminated, mutated, cloned; sum = slots
         )
         self._mut_dist_widget.set_mutation_std(self._spin_mut_std.value())
 
@@ -1460,6 +1606,56 @@ class LeagueTabWidget(QtWidgets.QWidget):
     def state(self) -> LeagueTabState:
         return self._state
 
+    def get_num_generations(self) -> int:
+        """Number of generations to run (from Next Generation spinbox)."""
+        return self._spin_generations.value()
+
+    def apply_population_from_run(
+        self, pop: Population, generation_index: int, summary: Dict[str, float]
+    ) -> None:
+        """Replace state with the result of a league run: one group from pop, update generation_index and last_summary."""
+        self._state.groups = [_population_to_single_group(pop, generation_index)]
+        self._state.generation_index = generation_index
+        self._state.last_summary = summary
+
+    def get_league_ui(self) -> Dict[str, object]:
+        """Return UI state (checkboxes, export, next-gen) for persistence."""
+        return {
+            "num_generations": self._spin_generations.value(),
+            "export_enabled": self._cb_export.isChecked(),
+            "export_when_index": self._combo_export_when.currentIndex(),
+            "export_every_n": self._spin_export_every_n.value(),
+            "export_what_index": self._combo_export_what.currentIndex(),
+            "elo_tuning_checked": self._cb_elo_tuning.isChecked(),
+            "ppo_checked": self._cb_ppo.isChecked(),
+        }
+
+    def set_league_ui(self, ui: Dict[str, object]) -> None:
+        """Restore UI state from saved league_ui."""
+        if not ui:
+            return
+        if "num_generations" in ui:
+            self._spin_generations.setValue(int(ui["num_generations"]))
+        if "export_enabled" in ui:
+            self._cb_export.setChecked(bool(ui["export_enabled"]))
+        if "export_when_index" in ui:
+            idx = int(ui["export_when_index"])
+            if 0 <= idx < self._combo_export_when.count():
+                self._combo_export_when.setCurrentIndex(idx)
+        if "export_every_n" in ui:
+            self._spin_export_every_n.setValue(int(ui["export_every_n"]))
+        if "export_what_index" in ui:
+            idx = int(ui["export_what_index"])
+            if 0 <= idx < self._combo_export_what.count():
+                self._combo_export_what.setCurrentIndex(idx)
+        if "elo_tuning_checked" in ui:
+            self._cb_elo_tuning.setChecked(bool(ui["elo_tuning_checked"]))
+        if "ppo_checked" in ui:
+            self._cb_ppo.setChecked(bool(ui["ppo_checked"]))
+        self._update_next_gen_export_enabled()
+        self._update_tour_elo_enabled()
+        self._update_tour_ppo_enabled()
+
     def get_league_config(self) -> LeagueConfig:
         """Build LeagueConfig from current widget values."""
         style = "elo" if self._combo_league_style.currentText() == "ELO-based" else "random"
@@ -1556,6 +1752,17 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._act_save.setEnabled(has_project)
         self._act_save_as.setEnabled(has_project)
         self._act_export.setEnabled(has_project)
+        # No-project screen: content width = viewport so no horizontal scroll and text is not cropped (gameplan §8).
+        if hasattr(self, "_league_content") and self._scroll is not None:
+            vw = max(self._scroll.viewport().width(), 400)
+            if not has_project:
+                self._league_content.setMinimumWidth(vw)
+                self._league_content.setMaximumWidth(vw)
+                self._scroll.horizontalScrollBar().setValue(0)
+                self._scroll.verticalScrollBar().setValue(0)
+            else:
+                self._league_content.setMinimumWidth(1920)
+                self._league_content.setMaximumWidth(100000)
 
     def _groups_tuples(self) -> List[tuple]:
         return [
@@ -1565,9 +1772,30 @@ class LeagueTabWidget(QtWidgets.QWidget):
 
     def _on_new_project(self) -> None:
         base = get_projects_folder()
-        if not base or not Path(base).exists():
-            Path(base).mkdir(parents=True, exist_ok=True)
-        dlg = NewProjectDialog(base, self)
+        if not base:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Projects folder not set",
+                "No projects folder is configured.\n\n"
+                "Go to the Settings tab, set a Projects folder, then try again.",
+            )
+            return
+        base_path = Path(base)
+        if not base_path.exists():
+            try:
+                base_path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Projects folder unavailable",
+                    "The projects folder could not be used:\n"
+                    f"{base}\n\n"
+                    f"{e}\n\n"
+                    "Please go to the Settings tab, choose a valid Projects folder, "
+                    "and try again.",
+                )
+                return
+        dlg = NewProjectDialog(str(base_path), self)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
         path = dlg.result_path()
@@ -1585,6 +1813,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 league_config=self.get_league_config(),
                 generation_index=0,
                 last_summary=None,
+                league_ui=self.get_league_ui(),
             )
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Create failed", str(e))
@@ -1614,7 +1843,26 @@ class LeagueTabWidget(QtWidgets.QWidget):
 
     def _on_open_project(self) -> None:
         base = get_projects_folder()
-        dlg = NewProjectDialog(base, self)
+        if not base:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Projects folder not set",
+                "No projects folder is configured.\n\n"
+                "Go to the Settings tab, set a Projects folder, then try again.",
+            )
+            return
+        base_path = Path(base)
+        if not base_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Projects folder unavailable",
+                "The projects folder does not exist:\n"
+                f"{base}\n\n"
+                "Please go to the Settings tab, choose a valid Projects folder, "
+                "and try again.",
+            )
+            return
+        dlg = NewProjectDialog(str(base_path), self)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
         path = dlg.result_path()
@@ -1642,6 +1890,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 )
             )
         self.set_league_config(data["league_config"])
+        self.set_league_ui(data.get("league_ui") or {})
         self._state.generation_index = data["generation_index"]
         self._state.last_summary = data.get("last_summary")
 
@@ -1657,6 +1906,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 league_config=self.get_league_config(),
                 generation_index=self._state.generation_index,
                 last_summary=self._state.last_summary,
+                league_ui=self.get_league_ui(),
             )
             self._update_project_label()
             QtWidgets.QMessageBox.information(self, "Save", f"Saved to {path}")
@@ -1686,6 +1936,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 last_summary=self._state.last_summary,
                 logs=logs,
                 project_dir=self._state.project_path,
+                league_ui=self.get_league_ui(),
             )
             QtWidgets.QMessageBox.information(self, "Export", f"Exported to {path}")
         except Exception as e:

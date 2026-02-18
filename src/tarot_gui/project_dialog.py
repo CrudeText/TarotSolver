@@ -148,13 +148,21 @@ class NewProjectDialog(QtWidgets.QDialog):
                 f"Project '{name}' already exists. Select it above to open.",
             )
             return
-        self._projects_folder.mkdir(parents=True, exist_ok=True)
+        try:
+            self._projects_folder.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Cannot create folder",
+                f"The projects folder could not be created or used:\n\n{self._projects_folder}\n\n{e}\n\nChoose a different folder in Settings, or create the folder manually.",
+            )
+            return
         self._result_path = str(path)
         self.accept()
 
     def _on_open_selected(self) -> None:
         item = self._list.currentItem()
-        if not item or not item.flags().testFlag(QtCore.Qt.ItemFlag.ItemIsEnabled):
+        if not item or not (item.flags() & QtCore.Qt.ItemFlag.ItemIsEnabled):
             return
         name = item.text()
         if name == "(no projects yet)":

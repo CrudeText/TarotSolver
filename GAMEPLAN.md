@@ -27,10 +27,11 @@ A project to train reinforcement learning models to play Tarot (3, 4, and 5 play
 | **3** | Baseline & validation | Random/rule-based agents, tests, human-playable CLI or minimal UI. | ✅ Implemented (random agent + tests). |
 | **4** | RL training pipeline | Training loop, reward design, checkpointing, evaluation. | ✅ Implemented (custom PyTorch PPO, CLI). |
 | **5** | Tournament system / league | Tables, matchmaking, GA, league orchestration. | ✅ Core backend implemented (CLI + JSON logs). |
-| **6** | GUI | Desktop GUI for league, agents, play vs AI, spectate. | 🚧 Placeholder shell only (PySide6 tabs). |
+| **6** | GUI | Desktop GUI for league, agents, play vs AI, spectate. | 🚧 League tab functional (population, project, config); Dashboard/Agents/Play/Settings placeholder. |
 
-Phases 1–5 are implemented at the backend level; Phase 6 has an initial
-placeholder GUI and will be iterated as league and agent views stabilise.
+Phases 1–5 are implemented at the backend level; Phase 6 has a functional
+League tab (population management, project save/load, league and GA config)
+and placeholder tabs for Dashboard, Agents, Play, and Settings.
 
 ---
 
@@ -393,12 +394,14 @@ At the **bottom** of the League Parameters board: a **single row of four equal-s
 | Tournament | PPO fine-tuning checkbox | When unchecked: ppo_top_k=0, ppo_updates_per_agent=0 | Wired |
 | Fitness | Weight (global ELO), Weight (avg score) | LeagueConfig.fitness_weight_* | Wired |
 | Reproduction | Elite %, Mutated %, Cloned %, Mut. std, Trait prob | GAConfig | Wired |
-| Next Gen | Generations spin | run_league_generations(num_generations=...) | Run not wired yet |
+| Next Gen | Generations spin | run_league_generations(num_generations=...) via LeagueRunWorker | Wired |
 | Next Gen | Export checkbox | Greys params; used when run loop exports | Run not wired |
 | Next Gen | Export when / Export what | Auto-export during run loop | Run not wired |
 | Next Gen | Export now button | population_to_json (full population) | Wired |
 
-**TODOs:** Run controls (Start/Pause/Cancel) not connected; implement LeagueRunWorker. Export during run: respect Export checkbox and Export when/what in generation callback. Export now: always full population; Export what combo ignored. Checkbox state (ELO/PPO) not persisted in projects.
+**Done:** Run controls (Start/Pause/Cancel) connected; `LeagueRunWorker` (QThread) runs `run_league_generations()` off main thread; per-generation update (state, project save, log append, UI refresh); Start enabled only when project loaded.
+
+**TODOs:** Export during run: respect Export checkbox and Export when/what in generation callback. Export now: always full population; Export what combo ignored. Checkbox state (ELO/PPO) not persisted in projects.
 
 ### 8.2 Agents & Hall of Fame
 
@@ -632,14 +635,16 @@ Once these are clear, Phase 1 can start; the rest can be decided as we reach eac
 7. ~~Phase 4 (RL training).~~ **Done.** Custom PyTorch PPO trainer, checkpointing, `tarot train-ppo-4p` / `tarot eval-4p`, `NNPolicy` loader.
 8. ~~Phase 5 (tournaments + league + GA).~~ **Done (backend).** `run_round_with_policies`, GA helpers, `run_league_generation`, `tarot league-4p` CLI with JSON logs.
 9. **Phase 6 (GUI).**
-   - Current: PySide6 placeholder with tabs for Dashboard, League Parameters, Agents, Play, Settings. **League Parameters** tab:
+   - Current: PySide6 app with tabs for Dashboard, League Parameters, Agents, Play, Settings. **League Parameters** tab is functional (layout, population, config, export now). **Dashboard** run controls are wired:
      - **Option 4 layout:** Target 1080p; min window 1920×1080; fullscreen windowed (maximized). Fixed heights: Project 52, Population 400, arrow 14, four flow boxes 526px each.
      - Population: tools row above table; pie + metrics + Group by on left; agent groups table with Select checkbox column, Expand/Delete buttons 52×20, row height 32.
      - Tournament: Rules ("N Players (FFT Rules)"), Matchmaking; Core always visible; ELO tuning and PPO fine-tuning with checkboxes (params greyed when unchecked).
      - Fitness: weights on one line; formula; multi-curve fitness graph with "Average Score" table legend; Selection checkbox.
      - Mutation/Clone: compact param rows, mutation distribution graph; Next Generation: Generations, Export checkbox (params greyed when unchecked).
+     - **Run controls (Dashboard):** `LeagueRunWorker` (QThread) runs `run_league_generations()`; Start/Pause/Cancel connected; per-generation state update, project save, log append, table refresh; Start enabled only when project loaded.
    - Next GUI tasks:
-     - Wire League tab to load and visualise `runs/league_*/generation_*.json`.
+     - Dashboard: live metrics (Gen X/Y, N agents, status line), charts (ELO evolution, fitness, diversity), ranking table, overview.
+     - Export during run: respect Export checkbox and Export when/what.
      - Implement basic Agents list from league logs plus Hall-of-Fame view.
      - Add a simple Play flow using existing engine/env policies (e.g. run one match, show textual summary).
 10. **Project management & experiment tracking (§8.5).**
@@ -650,11 +655,11 @@ Once these are clear, Phase 1 can start; the rest can be decided as we reach eac
 
 Planned work for the Dashboard tab (see §8.1.4 Run controls and live metrics). Suggested order:
 
-1. **Run controls wiring (highest priority)**
-   - Implement `LeagueRunWorker` (QThread / QRunnable) to run `run_league_generations()` off the main thread.
-   - Connect Start / Pause / Cancel to worker. Use `LeagueRunControl` for Cancel; Pause = stop iterating after current generation.
-   - Emit signal per generation `(generation_index, population, summary)` → update state, save project, append log, refresh UI.
-   - Require loaded project before Start is enabled.
+1. ~~**Run controls wiring (highest priority)**~~ **Done.**
+   - ~~Implement `LeagueRunWorker` (QThread) to run `run_league_generations()` off the main thread.~~
+   - ~~Connect Start / Pause / Cancel to worker. Use `LeagueRunControl` for Cancel; Pause = stop iterating after current generation.~~
+   - ~~Emit signal per generation → update state, save project, append log, refresh UI.~~
+   - ~~Require loaded project before Start is enabled.~~
 2. **Live metrics**
    - Expand ELO display: min / mean / max (already present), add Gen X/Y, N agents.
    - Status line: Idle, Running, Paused, Completed.
@@ -674,4 +679,4 @@ Planned work for the Dashboard tab (see §8.1.4 Run controls and live metrics). 
 
 ---
 
-*Document version: 1.11 — League Parameters backend wiring status (§8.1.6): control→backend mapping table, ELO/PPO checkbox semantics, TODOs.*
+*Document version: 1.13 — Dashboard run controls wired (LeagueRunWorker, Start/Pause/Cancel, per-gen save/refresh); next: live metrics, charts, ranking table, overview.*

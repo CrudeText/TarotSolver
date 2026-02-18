@@ -125,6 +125,7 @@ def project_save(
     league_config: LeagueConfig,
     generation_index: int = 0,
     last_summary: Optional[Dict[str, float]] = None,
+    league_ui: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Save project to directory.
@@ -135,6 +136,7 @@ def project_save(
         league_config: League configuration.
         generation_index: Last completed generation (0 if not yet run).
         last_summary: Last ELO summary dict.
+        league_ui: Optional UI state (checkboxes, export/next-gen params) to persist.
     """
     project_dir = Path(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +168,8 @@ def project_save(
         "generation_index": generation_index,
         "last_summary": last_summary,
     }
+    if league_ui is not None:
+        payload["league_ui"] = league_ui
 
     with (project_dir / PROJECT_JSON).open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
@@ -199,6 +203,7 @@ def project_load(project_dir: Path | str) -> Dict[str, Any]:
         "generation_index": int(payload.get("generation_index", 0)),
         "last_summary": payload.get("last_summary"),
         "project_dir": project_dir,
+        "league_ui": payload.get("league_ui"),
     }
 
 
@@ -211,6 +216,7 @@ def project_export_json(
     last_summary: Optional[Dict[str, float]] = None,
     logs: Optional[List[Dict[str, Any]]] = None,
     project_dir: Optional[Path | str] = None,
+    league_ui: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Export project to a single JSON file for easy sharing.
@@ -263,6 +269,8 @@ def project_export_json(
         "last_summary": last_summary,
         "logs": logs,
     }
+    if league_ui is not None:
+        payload["league_ui"] = league_ui
 
     json_path.parent.mkdir(parents=True, exist_ok=True)
     with json_path.open("w", encoding="utf-8") as f:
@@ -292,6 +300,7 @@ def project_import_json(json_path: Path | str) -> Dict[str, Any]:
         "last_summary": payload.get("last_summary"),
         "project_dir": json_path.parent,
         "logs": payload.get("logs"),
+        "league_ui": payload.get("league_ui"),
     }
 
 
