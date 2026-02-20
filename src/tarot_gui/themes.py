@@ -30,7 +30,7 @@ QGroupBox {
     padding-top: 14px;
     font-weight: bold;
 }
-QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px 2px 4px; }
+QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px 2px 4px; background-color: transparent; font-size: 14px; }
 QPushButton {
     background-color: #404040;
     color: #e0e0e0;
@@ -77,10 +77,10 @@ QTabBar::tab {
 }
 QTabBar::tab:selected { background-color: #404040; }
 QDialog { background-color: #2d2d2d; }
-QLabel { color: #e0e0e0; }
-QLabel:disabled { color: #606060; }
-QCheckBox { color: #e0e0e0; }
-QFormLayout label { color: #e0e0e0; }
+QLabel { color: #e0e0e0; background-color: transparent; }
+QLabel:disabled { color: #606060; background-color: transparent; }
+QCheckBox { color: #e0e0e0; background-color: transparent; }
+QFormLayout label { color: #e0e0e0; background-color: transparent; }
 """
 
 LIGHT_STYLESHEET = ""  # Use default Qt (light) palette

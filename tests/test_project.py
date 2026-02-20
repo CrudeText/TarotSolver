@@ -73,6 +73,44 @@ def test_project_save_and_load(tmp_path: Path) -> None:
     assert data["league_config"].ga_config.population_size == 4
 
 
+def test_project_save_and_load_with_sexual_reproduction_params(tmp_path: Path) -> None:
+    """Save and load a project with count-based GA and sexual reproduction params; they round-trip."""
+    groups = _make_groups_tuples()
+    cfg = LeagueConfig(
+        player_count=4,
+        deals_per_match=2,
+        rounds_per_generation=1,
+        ga_config=GAConfig(
+            population_size=4,
+            sexual_offspring_count=1,
+            mutate_count=2,
+            clone_count=1,
+            sexual_parent_with_replacement=False,
+            sexual_parent_fitness_weighted=False,
+            sexual_trait_combination="crossover",
+            mutation_prob=0.5,
+            mutation_std=0.1,
+        ),
+    )
+    project_save(
+        tmp_path,
+        groups=groups,
+        league_config=cfg,
+        generation_index=0,
+        last_summary={"elo_min": 1500, "elo_mean": 1500, "elo_max": 1500, "num_agents": 4.0},
+    )
+
+    data = project_load(tmp_path)
+    ga = data["league_config"].ga_config
+    assert ga is not None
+    assert ga.sexual_offspring_count == 1
+    assert ga.mutate_count == 2
+    assert ga.clone_count == 1
+    assert ga.sexual_parent_with_replacement is False
+    assert ga.sexual_parent_fitness_weighted is False
+    assert ga.sexual_trait_combination == "crossover"
+
+
 def test_project_export_and_import_json(tmp_path: Path) -> None:
     groups = _make_groups_tuples()
     cfg = LeagueConfig(player_count=4, deals_per_match=1, ga_config=None)

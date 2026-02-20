@@ -40,17 +40,21 @@ class LeagueConfig:
     ppo_updates_per_agent: int = 0
     # GA configuration (optional; if None, population is kept as-is)
     ga_config: GAConfig | None = None
-    # Fitness weights for compute_fitness
-    fitness_weight_global_elo: float = 1.0
-    fitness_weight_avg_score: float = 0.0
+    # Fitness = a*ELO^b + c*avg_score^d
+    fitness_elo_a: float = 1.0
+    fitness_elo_b: float = 1.0
+    fitness_avg_c: float = 0.0
+    fitness_avg_d: float = 1.0
 
 
 def _fitness_fn_from_config(cfg: LeagueConfig):
     def _fitness(agent: Agent) -> float:
         return compute_fitness(
             agent,
-            weight_global_elo=cfg.fitness_weight_global_elo,
-            weight_avg_score=cfg.fitness_weight_avg_score,
+            fitness_elo_a=cfg.fitness_elo_a,
+            fitness_elo_b=cfg.fitness_elo_b,
+            fitness_avg_c=cfg.fitness_avg_c,
+            fitness_avg_d=cfg.fitness_avg_d,
         )
 
     return _fitness

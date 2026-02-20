@@ -2,7 +2,14 @@
 
 import random
 
-from tarot.ga import GAConfig, compute_fitness, select_elites, mutate_agent, next_generation
+from tarot.ga import (
+    GAConfig,
+    combine_agents,
+    compute_fitness,
+    mutate_agent,
+    next_generation,
+    select_elites,
+)
 from tarot.tournament import Agent, Population
 
 
@@ -109,4 +116,62 @@ def test_elite_clone_fraction():
     mutate_ids = [aid for aid in new_pop.all_ids() if "-c" in aid and "-clone" not in aid]
     assert len(clone_ids) >= 1
     assert len(clone_ids) + len(mutate_ids) == 3  # 3 offspring slots
+
+
+def test_combine_agents_average():
+    """combine_agents with 'average' produces per-trait mean and records both parents."""
+    rng = random.Random(1)
+    p1 = Agent(id="P1", name="P1", player_counts=[4], traits={"x": 0.2, "y": 0.8})
+    p2 = Agent(id="P2", name="P2", player_counts=[4], traits={"x": 0.8, "y": 0.2})
+    child = combine_agents(p1, p2, "child", "average", rng)
+    assert child.id == "child"
+    assert child.parents == ["P1", "P2"]
+    assert child.traits["x"] == 0.5
+    assert child.traits["y"] == 0.5
+    assert all(0.0 <= v <= 1.0 for v in child.traits.values())
+
+
+def test_combine_agents_crossover():
+    """combine_agents with 'crossover' picks per-trait from one parent; traits in [0,1]."""
+    rng = random.Random(2)
+    p1 = Agent(id="P1", name="P1", player_counts=[4], traits={"a": 0.0, "b": 1.0})
+    p2 = Agent(id="P2", name="P2", player_counts=[4], traits={"a": 1.0, "b": 0.0})
+    child = combine_agents(p1, p2, "c1", "crossover", rng)
+    assert child.parents == ["P1", "P2"]
+    assert child.traits["a"] in (0.0, 1.0)
+    assert child.traits["b"] in (0.0, 1.0)
+    assert all(0.0 <= v <= 1.0 for v in child.traits.values())
+
+
+def test_next_generation_count_based_sexual_offspring():
+    """Count-based GA: sexual_offspring_count + mutate_count + clone_count fill slots; sexual offspring have two parents."""
+    pop = _make_dummy_population()
+    # 4 slots: 1 sexual, 2 mutated, 1 cloned
+    cfg = GAConfig(
+        population_size=4,
+        sexual_offspring_count=1,
+        mutate_count=2,
+        clone_count=1,
+        mutation_prob=0.0,
+        mutation_std=0.0,
+        sexual_parent_with_replacement=True,
+        sexual_parent_fitness_weighted=True,
+        sexual_trait_combination="average",
+    )
+    rng = random.Random(42)
+
+    new_pop = next_generation(pop, cfg, rng=rng, fitness_fn=compute_fitness)
+    assert len(new_pop.agents) == 4
+
+    sex_ids = [aid for aid in new_pop.all_ids() if aid.startswith("sex-")]
+    clone_ids = [aid for aid in new_pop.all_ids() if "-clone" in aid]
+    mut_ids = [aid for aid in new_pop.all_ids() if "-c" in aid and "-clone" not in aid and not aid.startswith("sex-")]
+
+    assert len(sex_ids) == 1, "expected one sexual offspring"
+    assert len(clone_ids) == 1
+    assert len(mut_ids) == 2
+
+    sexual = new_pop.get(sex_ids[0])
+    assert len(sexual.parents) == 2, "sexual offspring must have two parents"
+    assert all(0.0 <= v <= 1.0 for v in sexual.traits.values())
 

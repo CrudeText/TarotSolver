@@ -295,8 +295,10 @@ def _cmd_league_4p(args: argparse.Namespace) -> None:
                 "player_count": league_cfg.player_count,
                 "deals_per_match": league_cfg.deals_per_match,
                 "rounds_per_generation": league_cfg.rounds_per_generation,
-                "fitness_weight_global_elo": league_cfg.fitness_weight_global_elo,
-                "fitness_weight_avg_score": league_cfg.fitness_weight_avg_score,
+                "fitness_elo_a": league_cfg.fitness_elo_a,
+                "fitness_elo_b": league_cfg.fitness_elo_b,
+                "fitness_avg_c": league_cfg.fitness_avg_c,
+                "fitness_avg_d": league_cfg.fitness_avg_d,
                 "ga_config": {
                     "population_size": ga_cfg.population_size,
                     "elite_fraction": ga_cfg.elite_fraction,

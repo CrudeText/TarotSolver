@@ -329,6 +329,64 @@ class GroupDetailDialog(QtWidgets.QDialog):
         super().accept()
 
 
+class SexualReproductionSettingsDialog(QtWidgets.QDialog):
+    """Dialog to configure parent selection and trait combination for sexual offspring."""
+
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        with_replacement: bool,
+        fitness_weighted: bool,
+        trait_combination: str,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Sexual reproduction parameters")
+        layout = QtWidgets.QFormLayout(self)
+        # Row 1: Parent selection – weighting (Fitness-weighted / Uniform)
+        self._combo_weighting = QtWidgets.QComboBox()
+        self._combo_weighting.addItem("Fitness-weighted", True)
+        self._combo_weighting.addItem("Uniform", False)
+        self._combo_weighting.setCurrentIndex(0 if fitness_weighted else 1)
+        self._combo_weighting.setToolTip(
+            "How parents are chosen from the elite pool. Fitness-weighted: roulette selection by fitness "
+            "(fitter agents more likely to be picked). Uniform: each elite agent has equal probability."
+        )
+        layout.addRow("Parent selection – weighting:", self._combo_weighting)
+        # Row 2: With replacement – checkbox
+        self._check_replacement = QtWidgets.QCheckBox()
+        self._check_replacement.setChecked(with_replacement)
+        self._check_replacement.setToolTip(
+            "When checked, the same parent can be drawn more than once per offspring (or across offspring). "
+            "When unchecked, the two parents for each sexual offspring are always distinct."
+        )
+        layout.addRow("Parent selection – with replacement:", self._check_replacement)
+        # Row 3: Trait combination
+        self._combo_trait = QtWidgets.QComboBox()
+        self._combo_trait.addItem("Average", "average")
+        self._combo_trait.addItem("Crossover", "crossover")
+        idx = 0 if (trait_combination or "average").lower() == "average" else 1
+        self._combo_trait.setCurrentIndex(idx)
+        self._combo_trait.setToolTip(
+            "How the two parents' traits are combined. Average: each trait is the mean of the two parents' values. "
+            "Crossover: for each trait, randomly take the value from one parent or the other."
+        )
+        layout.addRow("Trait combination:", self._combo_trait)
+        layout.addRow(QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel,
+            accepted=self.accept,
+            rejected=self.reject,
+        ))
+
+    def get_with_replacement(self) -> bool:
+        return self._check_replacement.isChecked()
+
+    def get_fitness_weighted(self) -> bool:
+        return self._combo_weighting.currentData() is True
+
+    def get_trait_combination(self) -> str:
+        return self._combo_trait.currentData() or "average"
+
+
 class AugmentDialog(QtWidgets.QDialog):
     """Dialog to configure augment-from-selection (mutation and clone counts)."""
 
@@ -572,13 +630,18 @@ class LeagueTabWidget(QtWidgets.QWidget):
             self._update_league_content_size()
 
     def _setup_ui(self) -> None:
-        # Option 4: fixed layout for 1080p (1920×1080); scales to WQHD and above
-        CONTENT_HEIGHT_1080P = 1000  # fits in 1080 minus window chrome
+        # Layout: Project, Population (table scrolls internally when many rows), then row1 = Tournament|Next Gen, row2 = Fitness|Reproduction
         _m = 8  # layout vertical margins
-        PROJECT_HEIGHT = 84
-        POPULATION_HEIGHT = 400
+        PROJECT_HEIGHT = 96  # enough for project name + File button without cropping
+        POPULATION_HEIGHT = 460  # enough for pie, insights, tools, and table fully visible
         ARROW_HEIGHT = 14
-        FLOW_BOX_HEIGHT = CONTENT_HEIGHT_1080P - _m - PROJECT_HEIGHT - POPULATION_HEIGHT - ARROW_HEIGHT  # 526
+        FLOW_ROW_SPACING = 12
+        FLOW_BOX_HEIGHT_ROW1 = 320  # Tournament, Next Generation
+        FLOW_BOX_HEIGHT_ROW2 = 380  # Fitness, Reproduction (taller)
+        CONTENT_HEIGHT_1080P = (
+            _m + PROJECT_HEIGHT + POPULATION_HEIGHT + ARROW_HEIGHT
+            + FLOW_BOX_HEIGHT_ROW1 + FLOW_BOX_HEIGHT_ROW2 + FLOW_ROW_SPACING
+        )  # ~1278
 
         self._scroll = QtWidgets.QScrollArea()
         scroll = self._scroll
@@ -588,21 +651,22 @@ class LeagueTabWidget(QtWidgets.QWidget):
 
         self._league_content = QtWidgets.QWidget()
         content = self._league_content
-        content.setMinimumWidth(1920)
+        # Option C: content width bound to viewport in resize callback (no fixed 1920)
         content.setMinimumHeight(CONTENT_HEIGHT_1080P)
         layout = QtWidgets.QVBoxLayout(content)
         layout.setSpacing(0)
         layout.setContentsMargins(4, 4, 4, 4)
 
         proj_group = QtWidgets.QGroupBox("Project")
-        proj_layout = QtWidgets.QHBoxLayout(proj_group)
+        proj_layout = QtWidgets.QVBoxLayout(proj_group)
         self._label_project = QtWidgets.QLabel("No Project Loaded")
         self._label_project.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._label_project.setMinimumWidth(180)  # avoid cropping when narrow
+        self._label_project.setMinimumWidth(200)
+        self._label_project.setMinimumHeight(28)
         self._label_project.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #aaa; padding: 16px 0;"
+            "font-size: 16px; font-weight: bold; color: #c0c0c0; padding: 8px;"
         )
-        # No-project buttons (visible when no project loaded)
+        # No-project buttons (visible when no project loaded), underneath the label with spacing
         self._btns_no_project = QtWidgets.QWidget()
         no_proj_layout = QtWidgets.QHBoxLayout(self._btns_no_project)
         no_proj_layout.setContentsMargins(0, 0, 0, 0)
@@ -611,10 +675,12 @@ class LeagueTabWidget(QtWidgets.QWidget):
         btn_open = QtWidgets.QPushButton("Open Project")
         btn_open.clicked.connect(self._on_open_project)
         no_proj_layout.addWidget(btn_new)
+        no_proj_layout.addSpacing(12)
         no_proj_layout.addWidget(btn_open)
         # File button (visible only when project loaded)
         self._btn_file = QtWidgets.QPushButton("File")
-        self._btn_file.setFixedWidth(80)
+        self._btn_file.setFixedWidth(100)
+        self._btn_file.setMinimumHeight(34)
         file_menu = QtWidgets.QMenu(self)
         act_new = file_menu.addAction("New Project")
         act_new.triggered.connect(self._on_new_project)
@@ -632,14 +698,42 @@ class LeagueTabWidget(QtWidgets.QWidget):
         act_import.triggered.connect(self._on_import_project_json)
         self._btn_file.setMenu(file_menu)
         self._btn_file.setVisible(False)
-        # Center label and buttons in the bar (stretch on both sides)
-        proj_layout.addStretch(1)
-        proj_layout.addWidget(self._label_project)
-        proj_layout.addWidget(self._btns_no_project)
-        proj_layout.addWidget(self._btn_file)
-        proj_layout.addStretch(1)
+        # Row 1: project name (left, stretch) + File button (when project loaded)
+        proj_row1 = QtWidgets.QHBoxLayout()
+        self._label_project.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        proj_row1.addWidget(self._label_project, 1)
+        proj_row1.addWidget(self._btn_file, 0)
+        proj_layout.addLayout(proj_row1)
+        # Row 2: New Project / Open Project (only when no project loaded), centered under the label
+        self._no_project_row = QtWidgets.QWidget()
+        proj_row2 = QtWidgets.QHBoxLayout(self._no_project_row)
+        proj_row2.setContentsMargins(0, 4, 0, 0)
+        proj_row2.addStretch(1)
+        proj_row2.addWidget(self._btns_no_project, 0)
+        proj_row2.addStretch(1)
+        proj_layout.addWidget(self._no_project_row)
         proj_group.setFixedHeight(PROJECT_HEIGHT)
-        layout.addWidget(proj_group)
+        self._project_group = proj_group
+        self._project_height_when_loaded = PROJECT_HEIGHT
+
+        # No-project view: centered project box (~1/3 viewport height)
+        self._no_project_center = QtWidgets.QWidget()
+        no_proj_center_layout = QtWidgets.QVBoxLayout(self._no_project_center)
+        no_proj_center_layout.setContentsMargins(0, 0, 0, 0)
+        no_proj_center_layout.addWidget(proj_group)
+        self._no_project_view = QtWidgets.QWidget()
+        no_proj_view_layout = QtWidgets.QVBoxLayout(self._no_project_view)
+        no_proj_view_layout.setContentsMargins(0, 0, 0, 0)
+        no_proj_view_layout.addStretch(1)
+        no_proj_view_layout.addWidget(self._no_project_center)
+        no_proj_view_layout.addStretch(1)
+        # Project-loaded view: project bar at top, then content
+        self._project_view = QtWidgets.QWidget()
+        project_view_layout = QtWidgets.QVBoxLayout(self._project_view)
+        project_view_layout.setContentsMargins(0, 0, 0, 0)
+        project_view_layout.setSpacing(0)
+        # proj_group will be inserted at 0 when switching to project view
+        self._project_view_layout = project_view_layout
 
         self._content_container = QtWidgets.QWidget()
         content_layout = QtWidgets.QVBoxLayout(self._content_container)
@@ -671,7 +765,9 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._pie_insights_table.setColumnWidth(0, 100)
         pie_layout.addWidget(self._pie_insights_table)
         filter_row = QtWidgets.QHBoxLayout()
-        filter_row.addWidget(QtWidgets.QLabel("Group by:"))
+        lbl_group_by = QtWidgets.QLabel("Group by:")
+        lbl_group_by.setToolTip("How to group segments in the pie chart: by group name, GA status, or Play in league.")
+        filter_row.addWidget(lbl_group_by)
         self._combo_pie_group_by = QtWidgets.QComboBox()
         self._combo_pie_group_by.addItems(["Group name", "GA status", "Play in league"])
         self._combo_pie_group_by.setItemData(0, "Show distribution by group", QtCore.Qt.ItemDataRole.ToolTipRole)
@@ -688,10 +784,13 @@ class LeagueTabWidget(QtWidgets.QWidget):
         right_layout = QtWidgets.QVBoxLayout(right_col)
         right_layout.setContentsMargins(0, 0, 0, 0)
         tools_row = QtWidgets.QHBoxLayout()
-        tools_row.addWidget(QtWidgets.QLabel("Count:"))
+        lbl_count = QtWidgets.QLabel("Count:")
+        lbl_count.setToolTip("Number of random agents to add when clicking Add random.")
+        tools_row.addWidget(lbl_count)
         self._spin_add_random = QtWidgets.QSpinBox()
         self._spin_add_random.setRange(1, 999)
         self._spin_add_random.setValue(4)
+        self._spin_add_random.setMinimumWidth(52)
         tools_row.addWidget(self._spin_add_random)
         btn_add_random = QtWidgets.QPushButton("Add random")
         btn_add_random.clicked.connect(self._on_add_random)
@@ -737,12 +836,22 @@ class LeagueTabWidget(QtWidgets.QWidget):
         model.setHeaderData(GRP_COL_PLAY_IN_LEAGUE, QtCore.Qt.Orientation.Horizontal, GRP_TOOLTIP_PLAY_IN_LEAGUE, QtCore.Qt.ItemDataRole.ToolTipRole)
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        self._table.horizontalHeader().setMinimumSectionSize(80)
+        self._table.horizontalHeader().setMinimumSectionSize(24)
         self._table.verticalHeader().setDefaultSectionSize(34)
-        self._table.horizontalHeader().setSectionResizeMode(
-            GRP_COL_ELO, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        right_layout.addWidget(self._table, stretch=1)
+        header = self._table.horizontalHeader()
+        for col in range(GRP_NUM_COLUMNS):
+            if col == GRP_COL_NAME:
+                header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            else:
+                header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        # Table in scroll area: when few rows, no internal scroll; when many rows, scroll inside population box
+        self._table_scroll = QtWidgets.QScrollArea()
+        self._table_scroll.setWidgetResizable(True)
+        self._table_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self._table_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self._table_scroll.setWidget(self._table)
+        self._table_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        right_layout.addWidget(self._table_scroll, stretch=1)
         pop_middle.addWidget(right_col, stretch=1)
         pop_main.addLayout(pop_middle)
         pop_group.setFixedHeight(POPULATION_HEIGHT)
@@ -757,9 +866,14 @@ class LeagueTabWidget(QtWidgets.QWidget):
 
         add_arrow()
 
-        # Flow blocks: Tournament | Fitness | Elites+Parents | Mutation/Clone | Next Gen (same row)
-        flow_row = QtWidgets.QHBoxLayout()
-        flow_row.setSpacing(12)
+        # Flow blocks: row1 = Tournament | Next Gen, row2 = Fitness (left) | Reproduction (right)
+        flow_vertical = QtWidgets.QVBoxLayout()
+        flow_vertical.setSpacing(FLOW_ROW_SPACING)
+        flow_vertical.setContentsMargins(0, 0, 0, 0)
+        flow_row1 = QtWidgets.QHBoxLayout()
+        flow_row1.setSpacing(12)
+        flow_row2 = QtWidgets.QHBoxLayout()
+        flow_row2.setSpacing(12)
 
         # Tournament block with categories: Core (no checkbox) | ELO tuning | PPO
         tour_group = QtWidgets.QGroupBox("Tournament")
@@ -778,32 +892,55 @@ class LeagueTabWidget(QtWidgets.QWidget):
             player_model.appendRow(item)
         self._combo_player_count.setModel(player_model)
         self._combo_player_count.setCurrentIndex(1)
+        self._combo_player_count.setMinimumWidth(140)
         self._combo_player_count.currentIndexChanged.connect(self._update_tournament_insights)
+        self._combo_player_count.currentIndexChanged.connect(self._update_sideline_warning)
         self._combo_league_style = QtWidgets.QComboBox()
         self._combo_league_style.addItems(["ELO-based", "Random"])
+        self._combo_league_style.setMinimumWidth(130)
         self._combo_league_style.setItemData(0, "Match agents of similar ELO strength.", QtCore.Qt.ItemDataRole.ToolTipRole)
         self._combo_league_style.setItemData(1, "Shuffle agents randomly.", QtCore.Qt.ItemDataRole.ToolTipRole)
         core_row1 = QtWidgets.QHBoxLayout()
-        core_row1.addWidget(QtWidgets.QLabel("Rules:"))
+        lbl_rules = QtWidgets.QLabel("Rules:")
+        lbl_rules.setToolTip("Game rules: 3, 4, or 5 players per table (FFT rules).")
+        core_row1.addWidget(lbl_rules)
         core_row1.addWidget(self._combo_player_count)
+        # Warning icon: fixed-size frame (always reserves space); tooltip on frame so it shows on hover
+        self._sideline_warning_frame = QtWidgets.QFrame()
+        self._sideline_warning_frame.setFixedSize(26, 26)
+        sideline_icon_layout = QtWidgets.QHBoxLayout(self._sideline_warning_frame)
+        sideline_icon_layout.setContentsMargins(0, 0, 0, 0)
+        sideline_icon_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._sideline_warning_icon = QtWidgets.QLabel("")
+        self._sideline_warning_icon.setStyleSheet("color: #c9a227; font-size: 16px;")
+        sideline_icon_layout.addWidget(self._sideline_warning_icon)
+        core_row1.addWidget(self._sideline_warning_frame)
         core_row1.addSpacing(12)
-        core_row1.addWidget(QtWidgets.QLabel("Matchmaking:"))
+        lbl_matchmaking = QtWidgets.QLabel("Matchmaking:")
+        lbl_matchmaking.setToolTip("ELO-based: pair similar-strength agents. Random: random table assignment.")
+        core_row1.addWidget(lbl_matchmaking)
         core_row1.addWidget(self._combo_league_style)
         core_row1.addStretch()
         core_layout.addRow(core_row1)
         self._spin_deals = QtWidgets.QSpinBox()
         self._spin_deals.setRange(1, 99)
         self._spin_deals.setValue(5)
+        self._spin_deals.setMinimumWidth(52)
         self._spin_deals.valueChanged.connect(self._update_tournament_insights)
         self._spin_matches = QtWidgets.QSpinBox()
         self._spin_matches.setRange(1, 999)
         self._spin_matches.setValue(3)
+        self._spin_matches.setMinimumWidth(56)
         self._spin_matches.valueChanged.connect(self._update_tournament_insights)
         core_row2 = QtWidgets.QHBoxLayout()
-        core_row2.addWidget(QtWidgets.QLabel("Deals/match:"))
+        lbl_deals = QtWidgets.QLabel("Deals/match:")
+        lbl_deals.setToolTip("Number of deals played in each match. More deals give more stable ELO updates.")
+        core_row2.addWidget(lbl_deals)
         core_row2.addWidget(self._spin_deals)
         core_row2.addSpacing(12)
-        core_row2.addWidget(QtWidgets.QLabel("Matches/gen:"))
+        lbl_matches = QtWidgets.QLabel("Matches/gen:")
+        lbl_matches.setToolTip("Number of tournament rounds per generation. More rounds refine ELO rankings.")
+        core_row2.addWidget(lbl_matches)
         core_row2.addWidget(self._spin_matches)
         core_row2.addStretch()
         core_layout.addRow(core_row2)
@@ -813,52 +950,64 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_matches.setToolTip("Number of tournament rounds per generation. More rounds refine ELO rankings.")
         tour_layout.addWidget(tour_core)
 
-        # ELO tuning: checkbox (unchecked by default), params always visible but greyed when unchecked
+        # ELO tuning: checkbox (on by default), params always visible but greyed when unchecked
         self._cb_elo_tuning = QtWidgets.QCheckBox("ELO tuning")
-        self._cb_elo_tuning.setChecked(False)
+        self._cb_elo_tuning.setChecked(True)
         self._cb_elo_tuning.toggled.connect(self._update_tour_elo_enabled)
         tour_layout.addWidget(self._cb_elo_tuning)
         self._tour_elo_frame = QtWidgets.QFrame()
         self._tour_elo_frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self._tour_elo_frame.setEnabled(False)
+        self._tour_elo_frame.setEnabled(True)
         elo_layout = QtWidgets.QHBoxLayout(self._tour_elo_frame)
         self._spin_elo_k = QtWidgets.QDoubleSpinBox()
         self._spin_elo_k.setRange(1, 100)
         self._spin_elo_k.setValue(32)
+        self._spin_elo_k.setMinimumWidth(52)
         self._spin_elo_k.setToolTip("Max ELO change per pairwise comparison. Higher = faster rating changes.")
         self._spin_elo_margin = QtWidgets.QDoubleSpinBox()
         self._spin_elo_margin.setRange(1, 200)
         self._spin_elo_margin.setValue(50)
+        self._spin_elo_margin.setMinimumWidth(56)
         self._spin_elo_margin.setToolTip("Scale for score-diff to result mapping. Affects how big wins influence ELO.")
-        elo_layout.addWidget(QtWidgets.QLabel("ELO K-factor:"))
+        lbl_elo_k = QtWidgets.QLabel("ELO K-factor:")
+        lbl_elo_k.setToolTip("Max ELO change per pairwise comparison. Higher = faster rating changes.")
+        elo_layout.addWidget(lbl_elo_k)
         elo_layout.addWidget(self._spin_elo_k)
         elo_layout.addSpacing(12)
-        elo_layout.addWidget(QtWidgets.QLabel("ELO margin scale:"))
+        lbl_elo_margin = QtWidgets.QLabel("ELO margin scale:")
+        lbl_elo_margin.setToolTip("Scale for score-diff to result mapping. Affects how big wins influence ELO.")
+        elo_layout.addWidget(lbl_elo_margin)
         elo_layout.addWidget(self._spin_elo_margin)
         elo_layout.addStretch()
         tour_layout.addWidget(self._tour_elo_frame)
 
-        # PPO fine-tuning: checkbox (unchecked by default), params always visible but greyed when unchecked
+        # PPO fine-tuning: checkbox (on by default), params always visible but greyed when unchecked
         self._cb_ppo = QtWidgets.QCheckBox("PPO fine-tuning")
-        self._cb_ppo.setChecked(False)
+        self._cb_ppo.setChecked(True)
         self._cb_ppo.toggled.connect(self._update_tour_ppo_enabled)
         tour_layout.addWidget(self._cb_ppo)
         self._tour_ppo_frame = QtWidgets.QFrame()
         self._tour_ppo_frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self._tour_ppo_frame.setEnabled(False)
+        self._tour_ppo_frame.setEnabled(True)
         ppo_layout = QtWidgets.QHBoxLayout(self._tour_ppo_frame)
         self._spin_ppo_top_k = QtWidgets.QSpinBox()
         self._spin_ppo_top_k.setRange(0, 999)
         self._spin_ppo_top_k.setValue(0)
+        self._spin_ppo_top_k.setMinimumWidth(52)
         self._spin_ppo_top_k.setToolTip("0 = disabled. Top-K agents by fitness get PPO fine-tuning each generation.")
         self._spin_ppo_updates = QtWidgets.QSpinBox()
         self._spin_ppo_updates.setRange(0, 9999)
         self._spin_ppo_updates.setValue(0)
+        self._spin_ppo_updates.setMinimumWidth(56)
         self._spin_ppo_updates.setToolTip("Number of PPO update steps per agent when top-K > 0.")
-        ppo_layout.addWidget(QtWidgets.QLabel("PPO top-K:"))
+        lbl_ppo_k = QtWidgets.QLabel("PPO top-K:")
+        lbl_ppo_k.setToolTip("0 = disabled. Top-K agents by fitness get PPO fine-tuning each generation.")
+        ppo_layout.addWidget(lbl_ppo_k)
         ppo_layout.addWidget(self._spin_ppo_top_k)
         ppo_layout.addSpacing(12)
-        ppo_layout.addWidget(QtWidgets.QLabel("PPO updates/agent:"))
+        lbl_ppo_updates = QtWidgets.QLabel("PPO updates/agent:")
+        lbl_ppo_updates.setToolTip("Number of PPO update steps per agent when top-K > 0.")
+        ppo_layout.addWidget(lbl_ppo_updates)
         ppo_layout.addWidget(self._spin_ppo_updates)
         ppo_layout.addStretch()
         tour_layout.addWidget(self._tour_ppo_frame)
@@ -867,99 +1016,135 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._tour_insights.setWordWrap(True)
         self._tour_insights.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
         tour_layout.addWidget(self._tour_insights)
-        tour_group.setFixedHeight(FLOW_BOX_HEIGHT)
-        flow_row.addWidget(tour_group, 1)
+        tour_group.setFixedHeight(FLOW_BOX_HEIGHT_ROW1)
+        flow_row1.addWidget(tour_group, 1)
 
         # Fitness block: Weights (core, no checkbox) | Selection (checkbox)
         fit_group = QtWidgets.QGroupBox("Fitness")
         fit_layout = QtWidgets.QVBoxLayout(fit_group)
-        # Weights: paired on same line (core, always visible)
-        self._spin_weight_elo = QtWidgets.QDoubleSpinBox()
-        self._spin_weight_elo.setRange(0, 10)
-        self._spin_weight_elo.setValue(1.0)
-        self._spin_weight_elo.setDecimals(2)
-        self._spin_weight_elo.setSingleStep(0.1)
-        self._spin_weight_elo.setToolTip("Multiplier for global ELO in fitness. Higher = ELO dominates fitness.")
-        self._spin_weight_avg_score = QtWidgets.QDoubleSpinBox()
-        self._spin_weight_avg_score.setRange(0, 10)
-        self._spin_weight_avg_score.setValue(0.0)
-        self._spin_weight_avg_score.setDecimals(2)
-        self._spin_weight_avg_score.setSingleStep(0.1)
-        self._spin_weight_avg_score.setToolTip("Multiplier for average match score in fitness. Use to balance ELO vs raw score.")
-        fit_row_weights = QtWidgets.QHBoxLayout()
-        fit_row_weights.addWidget(QtWidgets.QLabel("Weight (global ELO):"))
-        fit_row_weights.addWidget(self._spin_weight_elo)
-        fit_row_weights.addSpacing(12)
-        fit_row_weights.addWidget(QtWidgets.QLabel("Weight (avg score):"))
-        fit_row_weights.addWidget(self._spin_weight_avg_score)
-        fit_row_weights.addStretch()
-        fit_layout.addLayout(fit_row_weights)
-        self._fitness_formula = QtWidgets.QLabel("fitness = 1.0 × ELO + 0.0 × avg_score")
-        self._fitness_formula.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
+        # Fitness = a*ELO^b + c*avg_score^d. Line 1: a, b. Line 2: c, d.
+        self._spin_fitness_a = QtWidgets.QDoubleSpinBox()
+        self._spin_fitness_a.setRange(0, 100)
+        self._spin_fitness_a.setValue(1.0)
+        self._spin_fitness_a.setDecimals(1)
+        self._spin_fitness_a.setSingleStep(0.1)
+        self._spin_fitness_a.setToolTip("Coefficient for ELO term: a in a×ELO^b.")
+        self._spin_fitness_b = QtWidgets.QDoubleSpinBox()
+        self._spin_fitness_b.setRange(0.01, 5.0)
+        self._spin_fitness_b.setValue(1.0)
+        self._spin_fitness_b.setDecimals(2)
+        self._spin_fitness_b.setSingleStep(0.01)
+        self._spin_fitness_b.setToolTip("Exponent for ELO: b in a×ELO^b.")
+        fit_row_elo = QtWidgets.QHBoxLayout()
+        lbl_a = QtWidgets.QLabel("a (ELO coef):")
+        lbl_a.setToolTip("Coefficient for ELO term: a in a×ELO^b.")
+        fit_row_elo.addWidget(lbl_a)
+        fit_row_elo.addWidget(self._spin_fitness_a)
+        fit_row_elo.addSpacing(12)
+        lbl_b = QtWidgets.QLabel("b (ELO exp):")
+        lbl_b.setToolTip("Exponent for ELO: b in a×ELO^b.")
+        fit_row_elo.addWidget(lbl_b)
+        fit_row_elo.addWidget(self._spin_fitness_b)
+        fit_row_elo.addStretch()
+        fit_layout.addLayout(fit_row_elo)
+        self._spin_fitness_c = QtWidgets.QDoubleSpinBox()
+        self._spin_fitness_c.setRange(0, 100)
+        self._spin_fitness_c.setValue(0.0)
+        self._spin_fitness_c.setDecimals(1)
+        self._spin_fitness_c.setSingleStep(0.1)
+        self._spin_fitness_c.setToolTip("Coefficient for avg_score term: c in c×avg_score^d.")
+        self._spin_fitness_d = QtWidgets.QDoubleSpinBox()
+        self._spin_fitness_d.setRange(0.01, 5.0)
+        self._spin_fitness_d.setValue(1.0)
+        self._spin_fitness_d.setDecimals(2)
+        self._spin_fitness_d.setSingleStep(0.01)
+        self._spin_fitness_d.setToolTip("Exponent for avg_score: d in c×avg_score^d.")
+        fit_row_score = QtWidgets.QHBoxLayout()
+        lbl_c = QtWidgets.QLabel("c (avg_score coef):")
+        lbl_c.setToolTip("Coefficient for avg_score term: c in c×avg_score^d.")
+        fit_row_score.addWidget(lbl_c)
+        fit_row_score.addWidget(self._spin_fitness_c)
+        fit_row_score.addSpacing(12)
+        lbl_d = QtWidgets.QLabel("d (avg_score exp):")
+        lbl_d.setToolTip("Exponent for avg_score: d in c×avg_score^d.")
+        fit_row_score.addWidget(lbl_d)
+        fit_row_score.addWidget(self._spin_fitness_d)
+        fit_row_score.addStretch()
+        fit_layout.addLayout(fit_row_score)
+        self._fitness_formula = QtWidgets.QLabel("Fitness = a×ELO^b + c×avg_score^d")
+        self._fitness_formula.setStyleSheet("color: #b8b8b8; font-size: 14px; font-weight: 500; padding: 4px 0;")
         self._fitness_formula.setWordWrap(True)
-        self._fitness_formula.setMaximumHeight(22)
-        for spin in (self._spin_weight_elo, self._spin_weight_avg_score):
+        self._fitness_formula.setMinimumHeight(28)
+        for spin in (self._spin_fitness_a, self._spin_fitness_b, self._spin_fitness_c, self._spin_fitness_d):
             spin.valueChanged.connect(self._update_fitness_formula)
         fit_layout.addWidget(self._fitness_formula)
         self._fitness_visual = FitnessVisualWidget()
         fit_layout.addWidget(self._fitness_visual)
-        fit_group.setFixedHeight(FLOW_BOX_HEIGHT)
-        flow_row.addWidget(fit_group, 1)
+        fit_group.setFixedHeight(FLOW_BOX_HEIGHT_ROW2)
+        flow_row2.addWidget(fit_group, 1)
 
         # Reproduction block: Elite %, Clone %, Mutation %, Mut std, distribution graph
         MUT_TOP_ROW_HEIGHT = 42
         mut_group = QtWidgets.QGroupBox("Reproduction")
-        mut_group.setFixedHeight(FLOW_BOX_HEIGHT)
+        mut_group.setFixedHeight(FLOW_BOX_HEIGHT_ROW2)
         mut_layout = QtWidgets.QVBoxLayout(mut_group)
-        mut_layout.setSpacing(14)
+        mut_layout.setSpacing(8)
         mut_layout.setContentsMargins(10, 8, 10, 10)
 
-        def _rep_compact_row(w: QtWidgets.QWidget) -> QtWidgets.QFrame:
-            f = QtWidgets.QFrame()
-            f.setFixedHeight(MUT_TOP_ROW_HEIGHT)
-            f.setSizePolicy(
+        def _rep_compact_row(w: QtWidgets.QWidget) -> QtWidgets.QWidget:
+            """Wrap widget in a fixed-height row (plain widget, no frame background)."""
+            wrapper = QtWidgets.QWidget()
+            wrapper.setFixedHeight(MUT_TOP_ROW_HEIGHT)
+            wrapper.setSizePolicy(
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            lo = QtWidgets.QVBoxLayout(f)
+            lo = QtWidgets.QVBoxLayout(wrapper)
             lo.setContentsMargins(0, 0, 0, 0)
             lo.addWidget(w)
-            return f
+            return wrapper
 
-        # 1. Elite, Clone, Mutation on one line (must sum to 100%)
+        # 1. Sexual offspring, Mutated, Cloned as counts (must sum to GA-eligible slots)
         params_row = QtWidgets.QHBoxLayout()
-        lbl_elite = QtWidgets.QLabel("Elite:")
-        lbl_elite.setToolTip("Fraction of population filled by offspring (mutated + cloned).")
-        self._spin_elite = QtWidgets.QDoubleSpinBox()
-        self._spin_elite.setRange(0, 100)
-        self._spin_elite.setValue(90)
-        self._spin_elite.setSuffix(" %")
-        self._spin_elite.setDecimals(1)
-        self._spin_elite.setMinimumWidth(72)
-        self._spin_elite.valueChanged.connect(self._on_elite_changed)
+        self._btn_sexual_settings = QtWidgets.QToolButton()
+        self._btn_sexual_settings.setText("\u2699")  # gear
+        self._btn_sexual_settings.setToolTip("Configure which parameters are combined in sexual reproduction.")
+        self._btn_sexual_settings.clicked.connect(self._on_sexual_reproduction_settings)
+        lbl_sexual = QtWidgets.QLabel("Sexual offspring:")
+        lbl_sexual.setToolTip(
+            "Number of slots filled by offspring from two parents. That many agents are eliminated and "
+            "replaced; parents are chosen from the elite pool (fitness-weighted) and their parameters are combined."
+        )
+        self._spin_kept = QtWidgets.QSpinBox()
+        self._spin_kept.setRange(0, 9999)
+        self._spin_kept.setValue(1)
+        self._spin_kept.setMinimumWidth(64)
+        self._spin_kept.setToolTip(
+            "Number of slots filled by sexual offspring (two parents from elite pool, parameters combined)."
+        )
+        self._spin_kept.valueChanged.connect(lambda: self._on_repro_count_changed("kept"))
+        lbl_mutate = QtWidgets.QLabel("Mutated:")
+        lbl_mutate.setToolTip("Number of offspring from mutation.")
+        self._spin_mutate = QtWidgets.QSpinBox()
+        self._spin_mutate.setRange(0, 9999)
+        self._spin_mutate.setValue(0)
+        self._spin_mutate.setMinimumWidth(64)
+        self._spin_mutate.setToolTip("Number of offspring from mutation.")
+        self._spin_mutate.valueChanged.connect(lambda: self._on_repro_count_changed("mutate"))
         lbl_clone = QtWidgets.QLabel("Cloned:")
-        lbl_clone.setToolTip("Fraction of population filled by cloning elites.")
-        self._spin_clone = QtWidgets.QDoubleSpinBox()
-        self._spin_clone.setRange(0, 100)
-        self._spin_clone.setValue(10)
-        self._spin_clone.setSuffix(" %")
-        self._spin_clone.setDecimals(1)
-        self._spin_clone.setMinimumWidth(72)
-        self._spin_clone.valueChanged.connect(self._on_clone_changed)
-        lbl_mut_pct = QtWidgets.QLabel("Mutated:")
-        lbl_mut_pct.setToolTip("Fraction of population filled by mutated offspring.")
-        self._spin_mut_prob = QtWidgets.QDoubleSpinBox()
-        self._spin_mut_prob.setRange(0, 100)
-        self._spin_mut_prob.setValue(80)
-        self._spin_mut_prob.setSuffix(" %")
-        self._spin_mut_prob.setDecimals(1)
-        self._spin_mut_prob.setMinimumWidth(72)
-        self._spin_mut_prob.valueChanged.connect(self._on_mutated_changed)
-        params_row.addWidget(lbl_elite)
-        params_row.addWidget(self._spin_elite)
+        lbl_clone.setToolTip("Number of offspring from cloning elites.")
+        self._spin_clone = QtWidgets.QSpinBox()
+        self._spin_clone.setRange(0, 9999)
+        self._spin_clone.setValue(0)
+        self._spin_clone.setMinimumWidth(64)
+        self._spin_clone.setToolTip("Number of offspring from cloning elites.")
+        self._spin_clone.valueChanged.connect(lambda: self._on_repro_count_changed("clone"))
+        params_row.addWidget(self._btn_sexual_settings)
+        params_row.addWidget(lbl_sexual)
+        params_row.addWidget(self._spin_kept)
         params_row.addSpacing(16)
-        params_row.addWidget(lbl_mut_pct)
-        params_row.addWidget(self._spin_mut_prob)
+        params_row.addWidget(lbl_mutate)
+        params_row.addWidget(self._spin_mutate)
         params_row.addSpacing(16)
         params_row.addWidget(lbl_clone)
         params_row.addWidget(self._spin_clone)
@@ -967,22 +1152,24 @@ class LeagueTabWidget(QtWidgets.QWidget):
         params_w = QtWidgets.QWidget()
         params_w.setLayout(params_row)
         mut_layout.addWidget(_rep_compact_row(params_w), 0)
-        # 2. Selection bar with color legend
+        # Sexual reproduction gearbox state (used by get_league_config; set by dialog and set_league_config)
+        self._sexual_parent_with_replacement = True
+        self._sexual_parent_fitness_weighted = True
+        self._sexual_trait_combination = "average"
+        # 2. Selection bar with color legend and Fitness arrow
         self._reproduction_bar_widget = ReproductionBarWidget()
         mut_layout.addWidget(self._reproduction_bar_widget, 0)
-        self._elites_insights = QtWidgets.QLabel("Elite count: —  Clone slots: —  Mutate slots: —")
-        self._elites_insights.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
-        self._elites_insights.setWordWrap(True)
-        mut_layout.addWidget(self._elites_insights, 0)
-        # 3. Mut. std and Trait prob (mutation probability when mutating)
+        # 3. Mutation std and Trait prob (no frame background; placed close to bar)
         mut_std_row = QtWidgets.QHBoxLayout()
-        lbl_mut_std = QtWidgets.QLabel("Mut. std:")
+        lbl_mut_std = QtWidgets.QLabel("Mutation std:")
         lbl_mut_std.setToolTip("Standard deviation of the Gaussian used to perturb traits.")
         self._spin_mut_std = QtWidgets.QDoubleSpinBox()
         self._spin_mut_std.setRange(0.01, 1.0)
         self._spin_mut_std.setValue(0.1)
-        self._spin_mut_std.setSingleStep(0.05)
+        self._spin_mut_std.setDecimals(2)
+        self._spin_mut_std.setSingleStep(0.01)
         self._spin_mut_std.setMinimumWidth(72)
+        self._spin_mut_std.setToolTip("Standard deviation of the Gaussian used to perturb traits.")
         lbl_trait_prob = QtWidgets.QLabel("Trait prob:")
         lbl_trait_prob.setToolTip("Probability that a trait is perturbed when creating a mutant offspring.")
         self._spin_trait_prob = QtWidgets.QDoubleSpinBox()
@@ -991,6 +1178,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_trait_prob.setSuffix(" %")
         self._spin_trait_prob.setDecimals(1)
         self._spin_trait_prob.setMinimumWidth(72)
+        self._spin_trait_prob.setToolTip("Probability that a trait is perturbed when creating a mutant offspring.")
         mut_std_row.addWidget(lbl_mut_std)
         mut_std_row.addWidget(self._spin_mut_std)
         mut_std_row.addSpacing(16)
@@ -999,33 +1187,31 @@ class LeagueTabWidget(QtWidgets.QWidget):
         mut_std_row.addStretch()
         mut_std_w = QtWidgets.QWidget()
         mut_std_w.setLayout(mut_std_row)
-        mut_layout.addWidget(_rep_compact_row(mut_std_w), 0)
+        mut_std_row_wrapper = _rep_compact_row(mut_std_w)
+        mut_std_row_wrapper.setStyleSheet("")  # ensure no groupbox/frame highlight
+        mut_layout.addWidget(mut_std_row_wrapper, 0)
         # 4. Mutation distribution graph
         self._mut_dist_widget = MutationDistWidget()
         self._mut_dist_widget.setMinimumHeight(180)
         self._mut_dist_widget.setMaximumHeight(280)
         mut_layout.addWidget(self._mut_dist_widget, 0)
         mut_layout.addStretch(1)
-        for spin in (self._spin_elite, self._spin_clone, self._spin_mut_prob, self._spin_mut_std, self._spin_trait_prob):
+        for spin in (self._spin_kept, self._spin_mutate, self._spin_clone, self._spin_mut_std, self._spin_trait_prob):
             spin.valueChanged.connect(self._update_ga_visual)
-        flow_row.addWidget(mut_group, 1)
+        flow_row2.addWidget(mut_group, 1)
 
-        # Next Generation block: Run (core, no checkbox) | Export (checkbox, params greyed when unchecked)
+        # Next Generation block: Run + Export (no checkbox; export options always visible)
         next_group = QtWidgets.QGroupBox("Next Generation")
         next_layout = QtWidgets.QVBoxLayout(next_group)
-        # Run: core, always visible
         self._spin_generations = QtWidgets.QSpinBox()
         self._spin_generations.setRange(1, 9999)
         self._spin_generations.setValue(10)
         self._spin_generations.setToolTip("Total number of generations to run.")
         run_form = QtWidgets.QFormLayout()
-        run_form.addRow(QtWidgets.QLabel("Generations:"), self._spin_generations)
+        lbl_gens = QtWidgets.QLabel("Generations:")
+        lbl_gens.setToolTip("Total number of generations to run.")
+        run_form.addRow(lbl_gens, self._spin_generations)
         next_layout.addLayout(run_form)
-        # Export: checkbox (off by default), params always visible but greyed when unchecked
-        self._cb_export = QtWidgets.QCheckBox("Export")
-        self._cb_export.setChecked(False)
-        self._cb_export.toggled.connect(self._update_next_gen_export_enabled)
-        next_layout.addWidget(self._cb_export)
         self._next_export_frame = QtWidgets.QFrame()
         self._next_export_frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         export_layout = QtWidgets.QVBoxLayout(self._next_export_frame)
@@ -1039,23 +1225,26 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_export_every_n.setValue(5)
         self._spin_export_every_n.setEnabled(False)
         def _on_export_when_changed() -> None:
-            if self._cb_export.isChecked():
-                self._spin_export_every_n.setEnabled(
-                    self._combo_export_when.currentIndex() == 2
-                )
+            self._spin_export_every_n.setEnabled(self._combo_export_when.currentIndex() == 2)
         self._combo_export_when.currentIndexChanged.connect(_on_export_when_changed)
         export_row = QtWidgets.QHBoxLayout()
-        export_row.addWidget(QtWidgets.QLabel("Export when:"))
+        lbl_export_when = QtWidgets.QLabel("Export when:")
+        lbl_export_when.setToolTip("When to auto-export: on demand only, every generation, or every N generations.")
+        export_row.addWidget(lbl_export_when)
         export_row.addWidget(self._combo_export_when)
         export_row.addSpacing(12)
-        export_row.addWidget(QtWidgets.QLabel("Every N gens:"))
+        lbl_export_n = QtWidgets.QLabel("Every N gens:")
+        lbl_export_n.setToolTip("Export population every N generations (used when Export when = Every N generations).")
+        export_row.addWidget(lbl_export_n)
         export_row.addWidget(self._spin_export_every_n)
         export_row.addStretch()
         export_layout.addLayout(export_row)
         self._combo_export_what = QtWidgets.QComboBox()
         self._combo_export_what.addItems(["Full population", "Top N by ELO", "GA-eligible only"])
         export_form_row = QtWidgets.QFormLayout()
-        export_form_row.addRow(QtWidgets.QLabel("Export what:"), self._combo_export_what)
+        lbl_export_what = QtWidgets.QLabel("Export what:")
+        lbl_export_what.setToolTip("What to include in the exported population: full, top N by ELO, or GA-eligible agents only.")
+        export_form_row.addRow(lbl_export_what, self._combo_export_what)
         export_layout.addLayout(export_form_row)
         btn_export = QtWidgets.QPushButton("Export now")
         btn_export.clicked.connect(self._on_export_now)
@@ -1065,33 +1254,44 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._next_gen_insights.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
         self._next_gen_insights.setWordWrap(True)
         next_layout.addWidget(self._next_gen_insights)
-        next_group.setFixedHeight(FLOW_BOX_HEIGHT)
-        flow_row.addWidget(next_group, 1)
+        next_group.setFixedHeight(FLOW_BOX_HEIGHT_ROW1)
+        flow_row1.addWidget(next_group, 1)
 
         flow_container = QtWidgets.QWidget()
-        flow_container.setLayout(flow_row)
+        flow_vertical.addLayout(flow_row1)
+        flow_vertical.addLayout(flow_row2)
+        flow_container.setLayout(flow_vertical)
         content_layout.addWidget(flow_container, 1)
 
         self._content_container.setMinimumHeight(CONTENT_HEIGHT_1080P)
-        layout.addWidget(self._content_container, 0)
-        layout.addStretch(1)
+        self._project_view_layout.addWidget(self._content_container, 0)
+        self._project_view_layout.addStretch(1)
+
+        self._stack = QtWidgets.QStackedWidget()
+        self._stack.addWidget(self._no_project_view)
+        self._stack.addWidget(self._project_view)
+        layout.addWidget(self._stack)
 
         scroll.setWidget(content)
-        # Fill viewport when taller than content so no grey strip at bottom.
-        # When no project is loaded, lock content width to viewport so no horizontal scroll and text stays visible (gameplan §8).
+        # Option C: content width always = viewport width (no horizontal scroll).
+        # When no project: content height = viewport height exactly so no vertical scroll.
+        # When project loaded: content height fills viewport (min 1000px for full layout).
         _min_content_h = CONTENT_HEIGHT_1080P
-        _min_content_w_full = 1920
-        _max_width_unlimited = 100000  # effectively no max when project loaded
         def _update_content_size():
             vp = scroll.viewport()
             vh, vw = vp.height(), max(vp.width(), 400)
-            content.setMinimumHeight(max(_min_content_h, vh))
             if self._state.project_path is None:
-                content.setMinimumWidth(vw)
-                content.setMaximumWidth(vw)
+                content.setMinimumHeight(vh)
+                content.setMaximumHeight(vh)
             else:
-                content.setMinimumWidth(_min_content_w_full)
-                content.setMaximumWidth(_max_width_unlimited)
+                content.setMinimumHeight(max(_min_content_h, vh))
+                content.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+            content.setMinimumWidth(vw)
+            content.setMaximumWidth(vw)
+            if self._state.project_path is None and self._stack.currentWidget() is self._no_project_view:
+                one_third = max(200, vh // 3)
+                self._no_project_center.setMinimumHeight(one_third)
+                self._project_group.setFixedHeight(one_third)
         _update_content_size()
         self._update_league_content_size = _update_content_size
         scroll.viewport().installEventFilter(
@@ -1101,12 +1301,12 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._update_ga_visual()
         self._update_pie_chart()
         self._update_tournament_insights()
+        self._update_sideline_warning()
         self._update_fitness_formula()
-        self._update_elites_insights()
+        self._sync_repro_counts_to_slots(self._get_ga_slots())
         self._update_next_gen_insights()
         self._update_tour_elo_enabled()
         self._update_tour_ppo_enabled()
-        self._update_next_gen_export_enabled()
 
         self._update_content_visibility()
 
@@ -1119,20 +1319,18 @@ class LeagueTabWidget(QtWidgets.QWidget):
         for row, group in enumerate(self._state.groups):
             self._table.insertRow(row)
             self._fill_group_row(row, group)
-        # Ensure columns are wide enough for content
-        self._table.setColumnWidth(GRP_COL_SELECT, max(36, self._table.columnWidth(GRP_COL_SELECT)))
-        self._table.setColumnWidth(GRP_COL_COLOR, max(60, self._table.columnWidth(GRP_COL_COLOR)))
-        self._table.setColumnWidth(GRP_COL_EXPAND, max(72, self._table.columnWidth(GRP_COL_EXPAND)))
-        self._table.setColumnWidth(GRP_COL_ACTIONS, max(75, self._table.columnWidth(GRP_COL_ACTIONS)))
-        self._table.setColumnWidth(GRP_COL_ELO, max(160, self._table.columnWidth(GRP_COL_ELO)))
+        # Auto-size columns to fit header and content (Group name stretches to fill)
+        self._table.resizeColumnsToContents()
         self._update_player_count_options()
         self._update_pie_chart()
-        if hasattr(self, "_update_elites_insights"):
-            self._update_elites_insights()
+        if hasattr(self, "_sync_repro_counts_to_slots") and hasattr(self, "_get_ga_slots"):
+            self._sync_repro_counts_to_slots(self._get_ga_slots())
         if hasattr(self, "_update_next_gen_insights"):
             self._update_next_gen_insights()
         if hasattr(self, "_update_tournament_insights"):
             self._update_tournament_insights()
+        if hasattr(self, "_update_sideline_warning"):
+            self._update_sideline_warning()
 
     def _update_pie_chart(self) -> None:
         total = self._state.total_agents()
@@ -1167,51 +1365,84 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 if item:
                     item.setText(str(val))
 
-    def _on_elite_changed(self) -> None:
-        """User changed Elite. Enforce Elite = Mutated + Cloned by adjusting Mutated (keep Clone)."""
-        e = self._spin_elite.value()
-        c = self._spin_clone.value()
-        self._spin_mut_prob.blockSignals(True)
+    def _get_ga_slots(self) -> int:
+        """GA-eligible agent count (slots for reproduction)."""
+        total = self._state.total_agents()
+        ga_eligible = sum(1 for g in self._state.groups for a in g.agents if a.can_use_as_ga_parent)
+        ref = total - ga_eligible
+        return max(0, total - ref)
+
+    def _on_repro_count_changed(self, source: str) -> None:
+        """Allow free adjustment; only clamp so each >= 0, each <= slots, and total <= slots (clamp the changed field if over)."""
+        slots = self._get_ga_slots()
+        if slots <= 0:
+            return
+        kept = max(0, min(slots, self._spin_kept.value()))
+        mutate = max(0, min(slots, self._spin_mutate.value()))
+        clone = max(0, min(slots, self._spin_clone.value()))
+        total = kept + mutate + clone
+        if total > slots:
+            # Clamp the field that was just changed so total <= slots
+            excess = total - slots
+            if source == "kept":
+                kept = max(0, kept - excess)
+            elif source == "mutate":
+                mutate = max(0, mutate - excess)
+            else:
+                clone = max(0, clone - excess)
+        for spin in (self._spin_kept, self._spin_clone, self._spin_mutate):
+            spin.blockSignals(True)
         try:
-            self._spin_mut_prob.setValue(max(0, min(e, e - c)))
+            self._spin_kept.setValue(kept)
+            self._spin_mutate.setValue(mutate)
+            self._spin_clone.setValue(clone)
         finally:
-            self._spin_mut_prob.blockSignals(False)
-        self._update_elites_insights()
+            for spin in (self._spin_kept, self._spin_clone, self._spin_mutate):
+                spin.blockSignals(False)
         self._update_ga_visual()
 
-    def _on_clone_changed(self) -> None:
-        """User changed Clone. Enforce Elite = Mutated + Cloned by adjusting Mutated."""
-        e = self._spin_elite.value()
-        c = self._spin_clone.value()
-        self._spin_mut_prob.blockSignals(True)
+    def _sync_repro_counts_to_slots(self, slots: int) -> None:
+        """Set spin max to slots; clamp values so each in [0, slots] and total <= slots."""
+        for spin in (self._spin_kept, self._spin_mutate, self._spin_clone):
+            spin.setMaximum(max(0, slots))
+        if slots <= 0:
+            return
+        kept = max(0, min(slots, self._spin_kept.value()))
+        mutate = max(0, min(slots, self._spin_mutate.value()))
+        clone = max(0, min(slots, self._spin_clone.value()))
+        if kept + mutate + clone > slots:
+            mutate = max(0, slots - kept - clone)
+        for spin in (self._spin_kept, self._spin_clone, self._spin_mutate):
+            spin.blockSignals(True)
         try:
-            self._spin_mut_prob.setValue(max(0, min(e, e - c)))
+            self._spin_kept.setValue(kept)
+            self._spin_mutate.setValue(mutate)
+            self._spin_clone.setValue(clone)
         finally:
-            self._spin_mut_prob.blockSignals(False)
-        self._update_elites_insights()
+            for spin in (self._spin_kept, self._spin_clone, self._spin_mutate):
+                spin.blockSignals(False)
         self._update_ga_visual()
 
-    def _on_mutated_changed(self) -> None:
-        """User changed Mutated. Enforce Elite = Mutated + Cloned by adjusting Clone."""
-        e = self._spin_elite.value()
-        m = self._spin_mut_prob.value()
-        self._spin_clone.blockSignals(True)
-        try:
-            self._spin_clone.setValue(max(0, min(e, e - m)))
-        finally:
-            self._spin_clone.blockSignals(False)
-        self._update_elites_insights()
-        self._update_ga_visual()
+    def _on_sexual_reproduction_settings(self) -> None:
+        """Open gearbox dialog to configure parent selection and trait combination for sexual reproduction."""
+        dlg = SexualReproductionSettingsDialog(
+            self,
+            with_replacement=self._sexual_parent_with_replacement,
+            fitness_weighted=self._sexual_parent_fitness_weighted,
+            trait_combination=self._sexual_trait_combination,
+        )
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self._sexual_parent_with_replacement = dlg.get_with_replacement()
+            self._sexual_parent_fitness_weighted = dlg.get_fitness_weighted()
+            self._sexual_trait_combination = dlg.get_trait_combination()
 
     def _update_ga_visual(self) -> None:
         slots, kept_count, clone_slots, mutate_slots = self._get_repro_counts()
-        # Bar: Eliminated (kept, not replaced) + Mutated + Cloned = slots (total agents)
+        # Bar: sexual offspring (red), mutated, cloned; sum = slots
         self._reproduction_bar_widget.set_params(
-            self._spin_elite.value(),
-            self._spin_clone.value(),
-            self._spin_mut_prob.value(),
+            0, 0, 0,
             total_agents=slots,
-            counts=(kept_count, mutate_slots, clone_slots),  # eliminated, mutated, cloned; sum = slots
+            counts=(kept_count, mutate_slots, clone_slots),
         )
         self._mut_dist_widget.set_mutation_std(self._spin_mut_std.value())
 
@@ -1227,15 +1458,24 @@ class LeagueTabWidget(QtWidgets.QWidget):
         for w in self._tour_ppo_frame.findChildren(QtWidgets.QWidget):
             w.setEnabled(enabled)
 
-    def _update_next_gen_export_enabled(self) -> None:
-        enabled = self._cb_export.isChecked()
-        self._next_export_frame.setEnabled(enabled)
-        for w in self._next_export_frame.findChildren(QtWidgets.QWidget):
-            w.setEnabled(enabled)
-        if enabled:
-            self._spin_export_every_n.setEnabled(
-                self._combo_export_when.currentIndex() == 2
-            )
+    def _update_sideline_warning(self) -> None:
+        """Show warning icon (⚠) next to Rules when total agent count is not a multiple of player count; full message in tooltip."""
+        total = self._state.total_agents()
+        pc = int(self._combo_player_count.currentData() or 4)
+        if pc <= 0 or total == 0:
+            self._sideline_warning_icon.setText("")
+            self._sideline_warning_frame.setToolTip("")
+            return
+        remainder = total % pc
+        if remainder == 0:
+            self._sideline_warning_icon.setText("")
+            self._sideline_warning_frame.setToolTip("")
+            return
+        on_sidelines = remainder
+        line1 = f"With {total} agents and {pc}-player tables, {on_sidelines} agent(s) will be randomly selected to sit out each matchmaking phase."
+        line2 = f"Consider adjusting the population to a multiple of {pc} so every agent can play every round."
+        self._sideline_warning_icon.setText("\u26a0")
+        self._sideline_warning_frame.setToolTip(line1 + "\n" + line2)
 
     def _update_tournament_insights(self) -> None:
         total = self._state.total_agents()
@@ -1252,34 +1492,22 @@ class LeagueTabWidget(QtWidgets.QWidget):
         )
 
     def _update_fitness_formula(self) -> None:
-        w_elo = self._spin_weight_elo.value()
-        w_score = self._spin_weight_avg_score.value()
-        d_elo = self._spin_weight_elo.decimals()
-        d_score = self._spin_weight_avg_score.decimals()
+        a, b = self._spin_fitness_a.value(), self._spin_fitness_b.value()
+        c, d = self._spin_fitness_c.value(), self._spin_fitness_d.value()
         self._fitness_formula.setText(
-            f"fitness = {w_elo:.{d_elo}f} × ELO + {w_score:.{d_score}f} × avg_score"
+            f"Fitness = {a:.1f}×ELO^{b:.2f} + {c:.1f}×avg_score^{d:.2f}"
         )
-        self._fitness_visual.set_params(w_elo, w_score)
+        self._fitness_visual.set_params(a, b, c, d)
 
     def _get_repro_counts(self) -> tuple[int, int, int, int]:
-        """Return (slots, kept_count, clone_slots, mutate_slots) using the same formula as GA. Used by bar and insights."""
-        total = self._state.total_agents()
-        ga_eligible = sum(1 for g in self._state.groups for a in g.agents if a.can_use_as_ga_parent)
-        ref = total - ga_eligible
-        slots = max(0, total - ref)
-        elite_pct = self._spin_elite.value() / 100
-        clone_pct = self._spin_clone.value() / 100
-        kept_count = max(1, int(slots * (1 - elite_pct))) if slots > 0 else 0
-        offspring_slots = slots - kept_count
-        clone_slots = int(offspring_slots * clone_pct / elite_pct) if elite_pct > 0 else 0
-        mutate_slots = max(0, offspring_slots - clone_slots)
-        return slots, kept_count, clone_slots, mutate_slots
-
-    def _update_elites_insights(self) -> None:
-        _, kept_count, clone_slots, mutate_slots = self._get_repro_counts()
-        self._elites_insights.setText(
-            f"Elite count: {kept_count}  Clone slots: {clone_slots}  Mutate slots: {mutate_slots}"
-        )
+        """Return (slots, sexual_offspring, clone_slots, mutate_slots) from spinboxes; each in [0, slots], sum may be <= slots."""
+        slots = self._get_ga_slots()
+        if slots <= 0:
+            return 0, 0, 0, 0
+        kept = max(0, min(slots, self._spin_kept.value()))
+        clone = max(0, min(slots, self._spin_clone.value()))
+        mutate = max(0, min(slots, self._spin_mutate.value()))
+        return slots, kept, clone, mutate
 
     def _update_next_gen_insights(self) -> None:
         total = self._state.total_agents()
@@ -1619,10 +1847,9 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._state.last_summary = summary
 
     def get_league_ui(self) -> Dict[str, object]:
-        """Return UI state (checkboxes, export, next-gen) for persistence."""
+        """Return UI state (checkboxes, next-gen, export) for persistence."""
         return {
             "num_generations": self._spin_generations.value(),
-            "export_enabled": self._cb_export.isChecked(),
             "export_when_index": self._combo_export_when.currentIndex(),
             "export_every_n": self._spin_export_every_n.value(),
             "export_what_index": self._combo_export_what.currentIndex(),
@@ -1636,8 +1863,6 @@ class LeagueTabWidget(QtWidgets.QWidget):
             return
         if "num_generations" in ui:
             self._spin_generations.setValue(int(ui["num_generations"]))
-        if "export_enabled" in ui:
-            self._cb_export.setChecked(bool(ui["export_enabled"]))
         if "export_when_index" in ui:
             idx = int(ui["export_when_index"])
             if 0 <= idx < self._combo_export_when.count():
@@ -1652,7 +1877,6 @@ class LeagueTabWidget(QtWidgets.QWidget):
             self._cb_elo_tuning.setChecked(bool(ui["elo_tuning_checked"]))
         if "ppo_checked" in ui:
             self._cb_ppo.setChecked(bool(ui["ppo_checked"]))
-        self._update_next_gen_export_enabled()
         self._update_tour_elo_enabled()
         self._update_tour_ppo_enabled()
 
@@ -1660,18 +1884,13 @@ class LeagueTabWidget(QtWidgets.QWidget):
         """Build LeagueConfig from current widget values."""
         style = "elo" if self._combo_league_style.currentText() == "ELO-based" else "random"
         player_count = int(self._combo_player_count.currentData() or 4)
-        elite_pct = self._spin_elite.value()
-        clone_pct = self._spin_clone.value()
-        mut_pct = self._spin_mut_prob.value()
-        elite_frac = 1.0 - elite_pct / 100.0
-        elite_clone_frac = (
-            clone_pct / elite_pct if elite_pct > 0 else 0.0
-        )
+        slots, sexual_n, clone, mutate = self._get_repro_counts()
         trait_prob = self._spin_trait_prob.value() / 100.0
         elo_k = self._spin_elo_k.value() if self._cb_elo_tuning.isChecked() else 32.0
         elo_margin = self._spin_elo_margin.value() if self._cb_elo_tuning.isChecked() else 50.0
         ppo_top = self._spin_ppo_top_k.value() if self._cb_ppo.isChecked() else 0
         ppo_updates = self._spin_ppo_updates.value() if self._cb_ppo.isChecked() else 0
+        pop_size = max(1, self._state.total_agents())
         return LeagueConfig(
             player_count=player_count,
             deals_per_match=self._spin_deals.value(),
@@ -1681,12 +1900,20 @@ class LeagueTabWidget(QtWidgets.QWidget):
             elo_margin_scale=elo_margin,
             ppo_top_k=ppo_top,
             ppo_updates_per_agent=ppo_updates,
-            fitness_weight_global_elo=self._spin_weight_elo.value(),
-            fitness_weight_avg_score=self._spin_weight_avg_score.value(),
+            fitness_elo_a=self._spin_fitness_a.value(),
+            fitness_elo_b=self._spin_fitness_b.value(),
+            fitness_avg_c=self._spin_fitness_c.value(),
+            fitness_avg_d=self._spin_fitness_d.value(),
             ga_config=GAConfig(
-                population_size=max(1, self._state.total_agents()),
-                elite_fraction=elite_frac,
-                elite_clone_fraction=elite_clone_frac,
+                population_size=pop_size,
+                elite_fraction=(slots - sexual_n) / slots if slots > 0 else 0.1,
+                elite_clone_fraction=clone / (clone + mutate) if (clone + mutate) > 0 else 0.0,
+                sexual_offspring_count=sexual_n,
+                mutate_count=mutate,
+                clone_count=clone,
+                sexual_parent_with_replacement=self._sexual_parent_with_replacement,
+                sexual_parent_fitness_weighted=self._sexual_parent_fitness_weighted,
+                sexual_trait_combination=self._sexual_trait_combination,
                 mutation_prob=trait_prob,
                 mutation_std=self._spin_mut_std.value(),
             ),
@@ -1705,28 +1932,45 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_elo_margin.setValue(cfg.elo_margin_scale)
         self._spin_ppo_top_k.setValue(cfg.ppo_top_k)
         self._spin_ppo_updates.setValue(cfg.ppo_updates_per_agent)
-        self._spin_weight_elo.setValue(cfg.fitness_weight_global_elo)
-        self._spin_weight_avg_score.setValue(cfg.fitness_weight_avg_score)
+        self._spin_fitness_a.setValue(cfg.fitness_elo_a)
+        self._spin_fitness_b.setValue(cfg.fitness_elo_b)
+        self._spin_fitness_c.setValue(cfg.fitness_avg_c)
+        self._spin_fitness_d.setValue(cfg.fitness_avg_d)
         if cfg.ga_config:
-            for spin in (self._spin_elite, self._spin_clone, self._spin_mut_prob):
+            ga = cfg.ga_config
+            slots = self._get_ga_slots()
+            if getattr(ga, "sexual_offspring_count", None) is not None and getattr(ga, "mutate_count", None) is not None and getattr(ga, "clone_count", None) is not None:
+                sexual_n = max(0, min(slots, ga.sexual_offspring_count))
+                clone = max(0, min(slots - sexual_n, ga.clone_count))
+                mutate = slots - sexual_n - clone
+                self._sexual_parent_with_replacement = getattr(ga, "sexual_parent_with_replacement", True)
+                self._sexual_parent_fitness_weighted = getattr(ga, "sexual_parent_fitness_weighted", True)
+                self._sexual_trait_combination = getattr(ga, "sexual_trait_combination", "average") or "average"
+            else:
+                ef = ga.elite_fraction
+                ecf = getattr(ga, "elite_clone_fraction", 0)
+                kept_elite = max(0, min(slots, int(round(slots * ef))))
+                sexual_n = slots - kept_elite
+                offspring = kept_elite
+                clone = max(0, min(offspring, int(round(offspring * ecf)))) if offspring > 0 else 0
+                mutate = offspring - clone
+                self._sexual_parent_with_replacement = True
+                self._sexual_parent_fitness_weighted = True
+                self._sexual_trait_combination = "average"
+            for spin in (self._spin_kept, self._spin_mutate, self._spin_clone):
                 spin.blockSignals(True)
             try:
-                ef = cfg.ga_config.elite_fraction
-                ecf = getattr(cfg.ga_config, "elite_clone_fraction", 0)
-                offspring_pct = (1.0 - ef) * 100
-                self._spin_elite.setValue(round(offspring_pct, 1))
-                if offspring_pct > 0:
-                    self._spin_clone.setValue(round(offspring_pct * ecf, 1))
-                    self._spin_mut_prob.setValue(round(offspring_pct * (1 - ecf), 1))
-                else:
-                    self._spin_clone.setValue(0)
-                    self._spin_mut_prob.setValue(0)
+                self._spin_kept.setMaximum(max(0, slots))
+                self._spin_mutate.setMaximum(max(0, slots))
+                self._spin_clone.setMaximum(max(0, slots))
+                self._spin_kept.setValue(sexual_n)
+                self._spin_clone.setValue(clone)
+                self._spin_mutate.setValue(mutate)
             finally:
-                for spin in (self._spin_elite, self._spin_clone, self._spin_mut_prob):
+                for spin in (self._spin_kept, self._spin_mutate, self._spin_clone):
                     spin.blockSignals(False)
-            self._spin_trait_prob.setValue(cfg.ga_config.mutation_prob * 100)
-            self._spin_mut_std.setValue(cfg.ga_config.mutation_std)
-            self._update_elites_insights()
+            self._spin_trait_prob.setValue(ga.mutation_prob * 100)
+            self._spin_mut_std.setValue(ga.mutation_std)
             self._update_ga_visual()
 
     def _update_project_label(self) -> None:
@@ -1734,12 +1978,12 @@ class LeagueTabWidget(QtWidgets.QWidget):
         if p:
             self._label_project.setText(Path(p).name)
             self._label_project.setStyleSheet(
-                "font-size: 13px; color: #888; padding: 8px 0 8px 0;"
+                "font-size: 14px; font-weight: bold; color: #e0e0e0; padding: 10px 8px;"
             )
         else:
             self._label_project.setText("No Project Loaded")
             self._label_project.setStyleSheet(
-                "font-size: 16px; font-weight: bold; color: #aaa; padding: 24px 0 16px 0;"
+                "font-size: 16px; font-weight: bold; color: #c0c0c0; padding: 12px 8px;"
             )
         self._update_content_visibility()
 
@@ -1748,21 +1992,39 @@ class LeagueTabWidget(QtWidgets.QWidget):
         has_project = self._state.project_path is not None
         self._content_container.setVisible(has_project)
         self._btns_no_project.setVisible(not has_project)
+        self._no_project_row.setVisible(not has_project)
         self._btn_file.setVisible(has_project)
         self._act_save.setEnabled(has_project)
         self._act_save_as.setEnabled(has_project)
         self._act_export.setEnabled(has_project)
-        # No-project screen: content width = viewport so no horizontal scroll and text is not cropped (gameplan §8).
-        if hasattr(self, "_league_content") and self._scroll is not None:
-            vw = max(self._scroll.viewport().width(), 400)
-            if not has_project:
-                self._league_content.setMinimumWidth(vw)
-                self._league_content.setMaximumWidth(vw)
-                self._scroll.horizontalScrollBar().setValue(0)
-                self._scroll.verticalScrollBar().setValue(0)
-            else:
-                self._league_content.setMinimumWidth(1920)
-                self._league_content.setMaximumWidth(100000)
+
+        vh = max(self._scroll.viewport().height(), 400) if hasattr(self, "_scroll") and self._scroll else 400
+        one_third = max(200, vh // 3)
+
+        if has_project:
+            # Project loaded: project bar at top, then full content
+            if self._no_project_center.layout().count() > 0:
+                self._no_project_center.layout().removeWidget(self._project_group)
+                self._project_group.setParent(None)
+                self._project_view_layout.insertWidget(0, self._project_group)
+            self._project_group.setFixedHeight(self._project_height_when_loaded)
+            self._stack.setCurrentWidget(self._project_view)
+        else:
+            # No project: centered project box, ~1/3 viewport height
+            if self._project_view_layout.indexOf(self._project_group) >= 0:
+                self._project_view_layout.removeWidget(self._project_group)
+                self._project_group.setParent(None)
+                self._no_project_center.layout().addWidget(self._project_group)
+            self._no_project_center.setMinimumHeight(one_third)
+            self._project_group.setFixedHeight(one_third)
+            self._stack.setCurrentWidget(self._no_project_view)
+
+        # Option C: content width always follows viewport (handled by _update_league_content_size).
+        if hasattr(self, "_update_league_content_size") and self._update_league_content_size is not None:
+            self._update_league_content_size()
+        if hasattr(self, "_scroll") and self._scroll is not None and not has_project:
+            self._scroll.horizontalScrollBar().setValue(0)
+            self._scroll.verticalScrollBar().setValue(0)
 
     def _groups_tuples(self) -> List[tuple]:
         return [

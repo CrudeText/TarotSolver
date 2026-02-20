@@ -18,6 +18,7 @@ from .league_tab import (
     LeagueTabState,
     LeagueTabWidget,
     RunSectionWidget,
+    _ResizeFilter,
     make_league_tab,
 )
 from tarot.league import LeagueRunControl
@@ -67,6 +68,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(tabs)
         self._connect_run_controls()
 
+    def _wrap_tab_in_scroll(self, content_widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+        """Option C: wrap tab content in a scroll area; inner widget max width = viewport (no horizontal scroll)."""
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setWidget(content_widget)
+
+        def on_viewport_resize() -> None:
+            vw = max(scroll.viewport().width(), 400)
+            content_widget.setMaximumWidth(vw)
+
+        scroll.viewport().installEventFilter(_ResizeFilter(scroll, on_viewport_resize))
+        on_viewport_resize()
+        return scroll
+
     @staticmethod
     def _make_centered_label(text: str) -> QtWidgets.QLabel:
         label = QtWidgets.QLabel(text)
@@ -75,8 +92,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return label
 
     def _make_dashboard_tab(self, league_state: LeagueTabState) -> tuple[QtWidgets.QWidget, RunSectionWidget]:
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
+        inner = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(inner)
 
         layout.addWidget(self._make_centered_label("Dashboard overview (placeholder)."))
 
@@ -84,7 +101,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(run_section)
 
         layout.addStretch(1)
-        return widget, run_section
+        scroll = self._wrap_tab_in_scroll(inner)
+        return scroll, run_section
 
     def _connect_run_controls(self) -> None:
         self._run_section.start_clicked.connect(self._on_league_start)
@@ -164,8 +182,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._league_control.request_cancel()
 
     def _make_agents_tab(self) -> QtWidgets.QWidget:
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
+        inner = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(inner)
 
         layout.addWidget(self._make_centered_label("Agents list and Hall of Fame (placeholder)."))
 
@@ -184,11 +202,11 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(buttons_row)
 
         layout.addStretch(1)
-        return widget
+        return self._wrap_tab_in_scroll(inner)
 
     def _make_play_tab(self) -> QtWidgets.QWidget:
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
+        inner = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(inner)
 
         layout.addWidget(self._make_centered_label("Play tab (custom tables, spectate, play-vs-AI)."))
 
@@ -200,11 +218,11 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(buttons_row)
 
         layout.addStretch(1)
-        return widget
+        return self._wrap_tab_in_scroll(inner)
 
     def _make_settings_tab(self) -> QtWidgets.QWidget:
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
+        inner = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(inner)
 
         form_group = QtWidgets.QGroupBox("Appearance")
         form_layout = QtWidgets.QFormLayout(form_group)
@@ -236,7 +254,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(other_group)
 
         layout.addStretch(1)
-        return widget
+        return self._wrap_tab_in_scroll(inner)
 
     def _on_theme_changed(self, text: str) -> None:
         theme = DARK if text.lower() == "dark" else LIGHT

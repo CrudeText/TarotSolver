@@ -318,16 +318,17 @@ class GenerationFlowWidget(QtWidgets.QWidget):
 
 
 class ReproductionBarWidget(QtWidgets.QWidget):
-    """Visual bar: eliminated (left), mutated, cloned. Elite = mutated + cloned (the rest)."""
+    """Visual bar: sexual offspring (red), mutated (green), cloned (purple). Shows warning when bar not full."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(56)
+        self.setMinimumHeight(82)
         self._elite_pct = 90.0
         self._clone_pct = 10.0
         self._mut_pct = 80.0
         self._total_agents = 0
-        self._counts: tuple[int, int, int] | None = None  # (eliminated_n, mut_n, clone_n)
+        self._counts: tuple[int, int, int] | None = None  # (sexual_n, mut_n, clone_n)
+        self._shortfall = 0  # slots not assigned when total_agents > sum(counts)
 
     def set_params(
         self,
@@ -341,7 +342,15 @@ class ReproductionBarWidget(QtWidgets.QWidget):
         self._clone_pct = max(0.0, min(100.0, clone_pct))
         self._mut_pct = max(0.0, min(100.0, mut_pct))
         self._total_agents = total_agents
-        self._counts = counts  # (eliminated, mutated, cloned); sum = total_agents
+        self._counts = counts
+        if total_agents and counts is not None:
+            self._shortfall = max(0, total_agents - sum(counts))
+        else:
+            self._shortfall = 0
+        if self._shortfall > 0:
+            self.setToolTip(f"{self._shortfall} slot(s) not assigned. Total reproduction counts are below the GA-eligible population.")
+        else:
+            self.setToolTip("")
         self.update()
 
     def paintEvent(self, event: QtCore.QEvent) -> None:
@@ -362,13 +371,28 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 elim_n, mut_n, clone_n = self._counts
             else:
                 elim_n = mut_n = clone_n = 0
-            # Segment widths: Eliminated + Mutated + Cloned = total (always)
+            # Segment order: gap (unassigned) on the left, then sexual (red), mutated (green), cloned (purple)
             if total <= 0:
                 total = 1
+            assigned = elim_n + mut_n + clone_n
+            gap_n = max(0, total - assigned)
             x = bar_x
             font = painter.font()
             font.setPointSize(7)
             painter.setFont(font)
+            # Gap (unassigned slots) on the left
+            if gap_n > 0:
+                gw = max(2, int(bar_w * gap_n / total))
+                painter.setBrush(QtGui.QBrush(_rgb(0x404040)))
+                painter.drawRect(int(x), y, gw, bar_h)
+                painter.setPen(QtGui.QPen(_rgb(0xffffff), 1))
+                painter.drawText(
+                    int(x), int(y), int(gw), int(bar_h),
+                    QtCore.Qt.AlignmentFlag.AlignCenter,
+                    str(gap_n),
+                )
+                painter.setPen(QtGui.QPen(pen_color, 1))
+                x += gw
             if elim_n > 0:
                 rw = max(2, int(bar_w * elim_n / total))
                 painter.setBrush(QtGui.QBrush(_rgb(0xD9534F)))
@@ -405,30 +429,50 @@ class ReproductionBarWidget(QtWidgets.QWidget):
                 )
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 x += cw
-            if x < bar_x + bar_w - 1:
-                painter.setBrush(QtGui.QBrush(_rgb(0x404040)))
-                painter.drawRect(int(x), y, int(bar_x + bar_w - x), bar_h)
-            # Percentage of population that is elite (mutated + cloned refill)
-            slots = self._total_agents
-            elite_n = mut_n + clone_n
-            pct = (100.0 * elite_n / slots) if slots > 0 else 0
-            painter.drawText(bar_x + bar_w + 6, y + 12, f"{pct:.0f}%")
-            # Color legend: eliminated (left), elite = mutated + cloned
+            # Warning icon when bar not full (slots not all assigned)
+            if self._shortfall > 0:
+                warn_x = bar_x + bar_w + 6
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.setPen(QtGui.QPen(_rgb(0xE6B800), 1))
+                painter.drawText(int(warn_x), y, 18, bar_h, QtCore.Qt.AlignmentFlag.AlignCenter, "\u26a0")
+                painter.setPen(QtGui.QPen(pen_color, 1))
+            # Color legend: sexual offspring (red), mutated, cloned
             font = painter.font()
             font.setPointSize(8)
             painter.setFont(font)
             leg_y = y + bar_h + 8
+            # Space legend items to avoid overlap (wider step for long labels)
+            leg_step = 125
             for i, (color, label) in enumerate([
-                (0xD9534F, "red: eliminated"),
+                (0xD9534F, "red: sexual offspring"),
                 (0x50C878, "green: mutated"),
                 (0xBB66FF, "purple: cloned"),
             ]):
-                lx = bar_x + i * 95
+                lx = bar_x + i * leg_step
                 painter.setBrush(QtGui.QBrush(_rgb(color)))
                 painter.setPen(QtCore.Qt.PenStyle.NoPen)
                 painter.drawRect(int(lx), int(leg_y), 10, 10)
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 painter.drawText(int(lx + 14), int(leg_y + 10), label)
+            # Arrow under the bar (left → right) with "Fitness" label: ranking direction (label close to arrow)
+            arrow_y = leg_y + 18
+            arrow_h = 6
+            painter.setPen(QtGui.QPen(pen_color, 1))
+            painter.setBrush(QtGui.QBrush(pen_color))
+            # Shaft
+            painter.drawLine(bar_x, int(arrow_y), int(bar_x + bar_w - arrow_h), int(arrow_y))
+            # Arrowhead (right-pointing triangle)
+            arrow = [
+                QtCore.QPoint(int(bar_x + bar_w - arrow_h), int(arrow_y - arrow_h // 2)),
+                QtCore.QPoint(int(bar_x + bar_w - arrow_h), int(arrow_y + arrow_h // 2)),
+                QtCore.QPoint(int(bar_x + bar_w), int(arrow_y)),
+            ]
+            painter.drawPolygon(arrow)
+            # Label directly under arrow (reduced gap)
+            painter.drawText(int(bar_x), int(arrow_y + 6), int(bar_w), 14,
+                            QtCore.Qt.AlignmentFlag.AlignCenter, "Fitness")
         finally:
             painter.end()
 
@@ -436,23 +480,27 @@ class ReproductionBarWidget(QtWidgets.QWidget):
 class FitnessVisualWidget(QtWidgets.QWidget):
     """Line graph: fitness vs ELO for several avg_score levels.
 
-    Shows multiple curves (avg_score = 0, 25, 50, 75, 100) so the effect of both
-    ELO weight and avg_score weight is visible. When avg_score weight is 0, lines overlap.
+    Formula: Fitness = a*ELO^b + c*avg_score^d.
+    Shows multiple curves (avg_score = 0, 25, 50, 75, 100). Y-axis scales to the data.
     """
 
-    # Colors for avg_score curves (0, 25, 50, 75, 100)
-    _CURVE_COLORS = (0x4A90D9, 0x50C878, 0xE6B800, 0xD9534F, 0x9B59B6)
+    # Colors for avg_score curves (0, 100, 200, 300, 400, 500)
+    _CURVE_COLORS = (0x4A90D9, 0x50C878, 0xE6B800, 0xD9534F, 0x9B59B6, 0x1ABC9C)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(200)
         self.setMinimumWidth(260)
-        self._weight_elo = 1.0
-        self._weight_avg_score = 0.0
+        self._a = 1.0
+        self._b = 1.0
+        self._c = 0.0
+        self._d = 1.0
 
-    def set_params(self, weight_elo: float, weight_avg_score: float) -> None:
-        self._weight_elo = weight_elo
-        self._weight_avg_score = weight_avg_score
+    def set_params(self, a: float, b: float, c: float, d: float) -> None:
+        self._a = a
+        self._b = b
+        self._c = c
+        self._d = d
         self.update()
 
     def paintEvent(self, event: QtCore.QEvent) -> None:
@@ -470,10 +518,25 @@ class FitnessVisualWidget(QtWidgets.QWidget):
             gh = h - margin_top - margin_bot
 
             elo_min, elo_max = 1000.0, 2000.0
-            fit_min, fit_max = 0.0, 2500.0
             elo_range = elo_max - elo_min
+            avg_scores = (0.0, 100.0, 200.0, 300.0, 400.0, 500.0)
+            n_pts = 80
+
+            # Sample all curves to get fit range (responsive to a, b, c, d)
+            fit_min, fit_max = float("inf"), float("-inf")
+            for avg_score in avg_scores:
+                for i in range(n_pts + 1):
+                    t = i / n_pts
+                    elo = elo_min + t * elo_range
+                    fit = self._a * (max(0.0, elo) ** self._b) + self._c * (max(0.0, avg_score) ** self._d)
+                    if fit < fit_min:
+                        fit_min = fit
+                    if fit > fit_max:
+                        fit_max = fit
+            if fit_min >= fit_max:
+                fit_min = 0.0
+                fit_max = 2500.0
             fit_range = fit_max - fit_min
-            avg_scores = (0.0, 25.0, 50.0, 75.0, 100.0)
 
             # Axes
             painter.setPen(QtGui.QPen(pen_color, 1))
@@ -507,14 +570,13 @@ class FitnessVisualWidget(QtWidgets.QWidget):
                 painter.drawLine(int(gx - 4), int(fy), int(gx), int(fy))
                 painter.drawText(int(gx - 32), int(fy + 4), f"{int(fit)}")
 
-            # Multiple lines: fitness = w_elo*ELO + w_avg_score*avg_score for each avg_score
-            n_pts = 80
+            # Multiple lines: fitness = a*ELO^b + c*avg_score^d for each avg_score
             for curve_idx, avg_score in enumerate(avg_scores):
                 path = QtGui.QPainterPath()
                 for i in range(n_pts + 1):
                     t = i / n_pts
                     elo = elo_min + t * elo_range
-                    fit = self._weight_elo * elo + self._weight_avg_score * avg_score
+                    fit = self._a * (max(0.0, elo) ** self._b) + self._c * (max(0.0, avg_score) ** self._d)
                     px = gx + t * (gw - 1)
                     norm = (fit - fit_min) / fit_range if fit_range > 0 else 0
                     norm = max(0.0, min(1.0, norm))
@@ -528,22 +590,25 @@ class FitnessVisualWidget(QtWidgets.QWidget):
                 painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
                 painter.drawPath(path)
 
-            # Legend: small table "Average Score" | color | value (0, 25, 50, 75, 100)
+            # Legend: box fully around title + rows (0, 100, 200, 300, 400, 500)
             leg_x = gx + gw + 6
-            leg_y = gy
             font.setPointSize(7)
             painter.setFont(font)
             cell_h = 14
-            col_w = (18, 22)  # color swatch, value
+            header_pad = 6  # padding above title so box fully encloses "Average Score"
+            col_w = (18, 28)  # color swatch, value (wider for 3-digit numbers)
             tab_w = col_w[0] + col_w[1]
-            tab_h = cell_h * 6  # header + 5 rows
+            num_rows = len(avg_scores)
+            tab_h = header_pad + cell_h + num_rows * cell_h  # title row + data rows
+            leg_y_top = gy
+            box_h = tab_h + 4
             painter.setPen(QtGui.QPen(pen_color, 1))
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            painter.drawRect(int(leg_x), int(leg_y), int(tab_w + 4), int(tab_h + 2))
-            painter.drawLine(int(leg_x), int(leg_y + cell_h), int(leg_x + tab_w + 4), int(leg_y + cell_h))
-            painter.drawText(int(leg_x + 2), int(leg_y + cell_h - 2), "Average Score")
+            painter.drawRect(int(leg_x), int(leg_y_top), int(tab_w + 4), int(box_h))
+            painter.drawLine(int(leg_x), int(leg_y_top + header_pad + cell_h), int(leg_x + tab_w + 4), int(leg_y_top + header_pad + cell_h))
+            painter.drawText(int(leg_x + 2), int(leg_y_top + header_pad + cell_h - 2), "Average Score")
             for i, avg_score in enumerate(avg_scores):
-                ly = leg_y + cell_h + 1 + i * cell_h
+                ly = leg_y_top + header_pad + cell_h + 1 + i * cell_h
                 color = self._CURVE_COLORS[i % len(self._CURVE_COLORS)]
                 painter.setPen(QtCore.Qt.PenStyle.NoPen)
                 painter.setBrush(QtGui.QBrush(_rgb(color)))

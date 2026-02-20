@@ -36,6 +36,17 @@ def _league_config_to_dict(cfg: LeagueConfig) -> Dict[str, Any]:
 def _league_config_from_dict(d: Dict[str, Any]) -> LeagueConfig:
     ga = d.get("ga_config")
     ga_config = GAConfig(**ga) if ga else None
+    # New fitness params: a*ELO^b + c*avg_score^d; fallback from old linear weights if present
+    if "fitness_elo_a" in d:
+        fitness_elo_a = float(d.get("fitness_elo_a", 1.0))
+        fitness_elo_b = float(d.get("fitness_elo_b", 1.0))
+        fitness_avg_c = float(d.get("fitness_avg_c", 0.0))
+        fitness_avg_d = float(d.get("fitness_avg_d", 1.0))
+    else:
+        fitness_elo_a = float(d.get("fitness_weight_global_elo", 1.0))
+        fitness_elo_b = 1.0
+        fitness_avg_c = float(d.get("fitness_weight_avg_score", 0.0))
+        fitness_avg_d = 1.0
     return LeagueConfig(
         player_count=int(d.get("player_count", 4)),
         deals_per_match=int(d.get("deals_per_match", 5)),
@@ -46,8 +57,10 @@ def _league_config_from_dict(d: Dict[str, Any]) -> LeagueConfig:
         ppo_top_k=int(d.get("ppo_top_k", 0)),
         ppo_updates_per_agent=int(d.get("ppo_updates_per_agent", 0)),
         ga_config=ga_config,
-        fitness_weight_global_elo=float(d.get("fitness_weight_global_elo", 1.0)),
-        fitness_weight_avg_score=float(d.get("fitness_weight_avg_score", 0.0)),
+        fitness_elo_a=fitness_elo_a,
+        fitness_elo_b=fitness_elo_b,
+        fitness_avg_c=fitness_avg_c,
+        fitness_avg_d=fitness_avg_d,
     )
 
 
