@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -45,11 +45,27 @@ class _ResizeFilter(QtCore.QObject):
         if event.type() == QtCore.QEvent.Type.Resize:
             self._on_resize()
         return super().eventFilter(obj, event)
+from tarot.ga import compute_fitness
 from tarot.league import LeagueConfig, LeagueRunControl, run_league_generations
-from tarot.persistence import population_from_dict
+from tarot.persistence import population_from_dict, population_to_json
 from tarot.population_helpers import clone_agents, generate_random_agents, mutate_from_base
 from tarot.project import get_checkpoint_base_dir, get_log_path
 from tarot.tournament import Agent, Population
+
+from .run_log import RunLogManager
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds as M:SS or H:MM:SS."""
+    if seconds < 0 or not isinstance(seconds, (int, float)):
+        return "0:00"
+    total = int(round(seconds))
+    if total >= 3600:
+        h, r = divmod(total, 3600)
+        m, s = divmod(r, 60)
+        return f"{h}:{m:02d}:{s:02d}"
+    m, s = divmod(total, 60)
+    return f"{m}:{s:02d}"
 
 
 class RunStatus(Enum):
@@ -198,6 +214,7 @@ class LeagueTabState:
     last_summary: Optional[Dict[str, float]] = None
     project_path: Optional[str] = None
     generation_index: int = 0
+    hof_agents: List[Agent] = field(default_factory=list)  # Hall of Fame: snapshots of best agents
 
     def build_population(self) -> Population:
         """Build flat Population from all agents in all groups (for backend)."""
@@ -528,15 +545,22 @@ class LeagueRunWorker(QtCore.QThread):
 
 
 class RunSectionWidget(QtWidgets.QWidget):
-    """Run controls (Start, Pause, Cancel) and ELO metrics. Placed in Dashboard tab."""
+    """Run controls (Start, Pause, Cancel), ELO metrics, run log path and Save/Load. Placed in Dashboard tab."""
 
     start_clicked = QtCore.Signal()
     pause_clicked = QtCore.Signal()
     cancel_clicked = QtCore.Signal()
+    run_log_loaded = QtCore.Signal(str)  # log_id when a run log file is loaded
 
-    def __init__(self, state: LeagueTabState, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(
+        self,
+        state: LeagueTabState,
+        parent: Optional[QtWidgets.QWidget] = None,
+        run_log_manager: Optional[RunLogManager] = None,
+    ) -> None:
         super().__init__(parent)
         self._state = state
+        self._run_log_manager = run_log_manager
         layout = QtWidgets.QVBoxLayout(self)
         run_group = QtWidgets.QGroupBox("Run")
         run_layout = QtWidgets.QVBoxLayout(run_group)
@@ -559,15 +583,37 @@ class RunSectionWidget(QtWidgets.QWidget):
         metrics_row.addWidget(self._label_elo)
         metrics_row.addStretch(1)
         run_layout.addLayout(metrics_row)
+        # One-line status: generation X of Y, elapsed, ETA (placeholder until wired)
+        self._label_status = QtWidgets.QLabel("Status: —")
+        run_layout.addWidget(self._label_status)
+        # Run log: user-defined path/name for auto-save, then Save / Load
+        run_layout.addWidget(QtWidgets.QLabel("Log to (auto-save each gen):"))
+        log_path_row = QtWidgets.QHBoxLayout()
+        self._edit_log_dir = QtWidgets.QLineEdit()
+        self._edit_log_dir.setPlaceholderText("Directory")
+        self._edit_log_dir.setClearButtonEnabled(True)
+        self._edit_log_filename = QtWidgets.QLineEdit()
+        self._edit_log_filename.setPlaceholderText("Filename (e.g. run.jsonl)")
+        self._edit_log_filename.setClearButtonEnabled(True)
+        self._btn_browse_log_dir = QtWidgets.QPushButton("Browse…")
+        self._btn_browse_log_dir.clicked.connect(self._on_browse_log_dir)
+        log_path_row.addWidget(self._edit_log_dir)
+        log_path_row.addWidget(self._edit_log_filename)
+        log_path_row.addWidget(self._btn_browse_log_dir)
+        run_layout.addLayout(log_path_row)
+        self._edit_log_dir.textChanged.connect(self._on_log_path_changed)
+        self._edit_log_filename.textChanged.connect(self._on_log_path_changed)
+        run_log_btn_row = QtWidgets.QHBoxLayout()
+        self._btn_save_run_log = QtWidgets.QPushButton("Save run log")
+        self._btn_load_run_log = QtWidgets.QPushButton("Load run log")
+        self._btn_save_run_log.clicked.connect(self._on_save_run_log)
+        self._btn_load_run_log.clicked.connect(self._on_load_run_log)
+        run_log_btn_row.addWidget(self._btn_save_run_log)
+        run_log_btn_row.addWidget(self._btn_load_run_log)
+        run_log_btn_row.addStretch(1)
+        run_layout.addLayout(run_log_btn_row)
         layout.addWidget(run_group)
-
-        # Charts placeholder for Phase 4
-        charts_placeholder = QtWidgets.QLabel("Charts area (Phase 4)")
-        charts_placeholder.setMinimumHeight(180)
-        charts_placeholder.setAlignment(QtCore.Qt.AlignCenter)
-        charts_placeholder.setObjectName("dashboardChartsPlaceholder")
-        charts_placeholder.setStyleSheet("QLabel#dashboardChartsPlaceholder { border: 1px solid #606060; }")
-        layout.addWidget(charts_placeholder, stretch=1)
+        self.update_run_log_buttons()
 
     def _on_start_clicked(self) -> None:
         self.start_clicked.emit()
@@ -577,6 +623,74 @@ class RunSectionWidget(QtWidgets.QWidget):
 
     def _on_cancel_clicked(self) -> None:
         self.cancel_clicked.emit()
+
+    def _on_browse_log_dir(self) -> None:
+        directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose log directory")
+        if directory:
+            self._edit_log_dir.setText(directory)
+
+    def _on_log_path_changed(self) -> None:
+        if self._run_log_manager is None:
+            return
+        dir_text = self._edit_log_dir.text().strip() or None
+        name_text = self._edit_log_filename.text().strip() or None
+        self._run_log_manager.set_auto_save(dir_text, name_text)
+
+    def _on_save_run_log(self) -> None:
+        if self._run_log_manager is None or not self._run_log_manager.has_current_data():
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save run log", "", "JSONL (*.jsonl);;All files (*)"
+        )
+        if path:
+            self._run_log_manager.save_to_path(path)
+
+    def _on_load_run_log(self) -> None:
+        if self._run_log_manager is None:
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load run log", "", "JSONL (*.jsonl);;All files (*)"
+        )
+        if path:
+            log_id = self._run_log_manager.load_from_path(path)
+            self.run_log_loaded.emit(log_id)
+
+    def update_run_log_buttons(self) -> None:
+        """Enable Save when there is current run log data; call after generation_done or clear."""
+        if self._run_log_manager is not None:
+            self._btn_save_run_log.setEnabled(self._run_log_manager.has_current_data())
+        else:
+            self._btn_save_run_log.setEnabled(False)
+
+    def update_run_status(
+        self,
+        gen_index: int,
+        total_generations: int,
+        elapsed_seconds: float,
+        eta_seconds: Optional[float],
+    ) -> None:
+        """
+        Update the status line (Generation X of Y, Elapsed, ETA).
+        Called only when a generation completes (or when run finishes to clear).
+        gen_index: 0-based index of the generation just completed (-1 when not running).
+        total_generations: from League Parameters (get_num_generations()).
+        elapsed_seconds: time since run start.
+        eta_seconds: estimated seconds remaining (None for first gens or when not running).
+        """
+        if gen_index < 0 or total_generations <= 0:
+            self._label_status.setText("Status: —")
+            return
+        # Generation X of Y (1-based display)
+        x = gen_index + 1
+        y = total_generations
+        elapsed_str = _format_duration(elapsed_seconds)
+        if eta_seconds is None:
+            eta_str = "calculating…" if gen_index < 1 else "—"
+        else:
+            eta_str = _format_duration(eta_seconds)
+        self._label_status.setText(
+            f"Generation {x} of {y}  |  Elapsed: {elapsed_str}  |  ETA: {eta_str}"
+        )
 
     def set_buttons_running(self, running: bool) -> None:
         """Enable Pause/Cancel and disable Start when running; when idle, enable Start only if project loaded."""
@@ -593,6 +707,7 @@ class RunSectionWidget(QtWidgets.QWidget):
         super().showEvent(event)
         self.update_metrics()
         self.update_start_enabled()
+        self.update_run_log_buttons()
 
     def update_metrics(self) -> None:
         """Refresh ELO label from state."""
@@ -619,6 +734,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._state = LeagueTabState()
+        self._league_params_dirty = False
         self._rng = random.Random()
         self._update_league_content_size: Optional[callable] = None
         self._setup_ui()
@@ -637,7 +753,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
         ARROW_HEIGHT = 14
         FLOW_ROW_SPACING = 12
         FLOW_BOX_HEIGHT_ROW1 = 320  # Tournament, Next Generation
-        FLOW_BOX_HEIGHT_ROW2 = 380  # Fitness, Reproduction (taller)
+        FLOW_BOX_HEIGHT_ROW2 = 494  # Fitness, Reproduction (taller; ~30% increase from 380)
+        FLOW_GRAPH_MIN_HEIGHT = 260  # Min height for Fitness line chart and Reproduction mutation-dist graph (identical)
         CONTENT_HEIGHT_1080P = (
             _m + PROJECT_HEIGHT + POPULATION_HEIGHT + ARROW_HEIGHT
             + FLOW_BOX_HEIGHT_ROW1 + FLOW_BOX_HEIGHT_ROW2 + FLOW_ROW_SPACING
@@ -698,10 +815,27 @@ class LeagueTabWidget(QtWidgets.QWidget):
         act_import.triggered.connect(self._on_import_project_json)
         self._btn_file.setMenu(file_menu)
         self._btn_file.setVisible(False)
-        # Row 1: project name (left, stretch) + File button (when project loaded)
+        # Unsaved warning indicator (visible only when league params are dirty)
+        self._btn_unsaved_warning = QtWidgets.QToolButton()
+        self._btn_unsaved_warning.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MessageBoxWarning)
+        )
+        self._btn_unsaved_warning.setToolTip("Unsaved changes in league parameters")
+        self._btn_unsaved_warning.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self._btn_unsaved_warning.setVisible(False)
+        # Save button (visible when project loaded)
+        self._btn_save = QtWidgets.QPushButton("Save")
+        self._btn_save.setFixedWidth(80)
+        self._btn_save.setMinimumHeight(34)
+        self._btn_save.setToolTip("Save project (league config and UI state)")
+        self._btn_save.clicked.connect(self._on_save_project)
+        self._btn_save.setVisible(False)
+        # Row 1: project name (left, stretch) + warning (when dirty) + Save + File (when project loaded)
         proj_row1 = QtWidgets.QHBoxLayout()
         self._label_project.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         proj_row1.addWidget(self._label_project, 1)
+        proj_row1.addWidget(self._btn_unsaved_warning, 0)
+        proj_row1.addWidget(self._btn_save, 0)
         proj_row1.addWidget(self._btn_file, 0)
         proj_layout.addLayout(proj_row1)
         # Row 2: New Project / Open Project (only when no project loaded), centered under the label
@@ -1079,6 +1213,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
             spin.valueChanged.connect(self._update_fitness_formula)
         fit_layout.addWidget(self._fitness_formula)
         self._fitness_visual = FitnessVisualWidget()
+        self._fitness_visual.setMinimumHeight(FLOW_GRAPH_MIN_HEIGHT)
         fit_layout.addWidget(self._fitness_visual)
         fit_group.setFixedHeight(FLOW_BOX_HEIGHT_ROW2)
         flow_row2.addWidget(fit_group, 1)
@@ -1190,10 +1325,10 @@ class LeagueTabWidget(QtWidgets.QWidget):
         mut_std_row_wrapper = _rep_compact_row(mut_std_w)
         mut_std_row_wrapper.setStyleSheet("")  # ensure no groupbox/frame highlight
         mut_layout.addWidget(mut_std_row_wrapper, 0)
-        # 4. Mutation distribution graph
+        # 4. Mutation distribution graph (same min height as Fitness graph)
         self._mut_dist_widget = MutationDistWidget()
-        self._mut_dist_widget.setMinimumHeight(180)
-        self._mut_dist_widget.setMaximumHeight(280)
+        self._mut_dist_widget.setMinimumHeight(FLOW_GRAPH_MIN_HEIGHT)
+        self._mut_dist_widget.setMaximumHeight(400)
         mut_layout.addWidget(self._mut_dist_widget, 0)
         mut_layout.addStretch(1)
         for spin in (self._spin_kept, self._spin_mutate, self._spin_clone, self._spin_mut_std, self._spin_trait_prob):
@@ -1214,7 +1349,15 @@ class LeagueTabWidget(QtWidgets.QWidget):
         next_layout.addLayout(run_form)
         self._next_export_frame = QtWidgets.QFrame()
         self._next_export_frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        export_layout = QtWidgets.QVBoxLayout(self._next_export_frame)
+        export_main_layout = QtWidgets.QHBoxLayout(self._next_export_frame)
+
+        # Left: normal export options
+        export_left = QtWidgets.QWidget()
+        export_layout = QtWidgets.QVBoxLayout(export_left)
+        export_layout.setContentsMargins(0, 0, 0, 0)
+        export_sep = QtWidgets.QLabel("Population Export")
+        export_sep.setStyleSheet("color: #888; font-weight: bold;")
+        export_layout.addWidget(export_sep)
         self._combo_export_when = QtWidgets.QComboBox()
         self._combo_export_when.addItems(["On demand only", "Every generation", "Every N generations"])
         self._combo_export_when.setItemData(0, "Export manually.", QtCore.Qt.ItemDataRole.ToolTipRole)
@@ -1249,6 +1392,66 @@ class LeagueTabWidget(QtWidgets.QWidget):
         btn_export = QtWidgets.QPushButton("Export now")
         btn_export.clicked.connect(self._on_export_now)
         export_layout.addWidget(btn_export)
+        export_main_layout.addWidget(export_left, 1)
+
+        # Right: Hall of Fame block
+        hof_widget = QtWidgets.QWidget()
+        hof_layout = QtWidgets.QVBoxLayout(hof_widget)
+        hof_layout.setContentsMargins(16, 0, 0, 0)
+        hof_sep = QtWidgets.QLabel("Hall of Fame")
+        hof_sep.setStyleSheet("color: #888; font-weight: bold;")
+        hof_layout.addWidget(hof_sep)
+        self._combo_hof_when = QtWidgets.QComboBox()
+        self._combo_hof_when.addItems(["On demand only", "Every generation", "Every N generations"])
+        self._combo_hof_when.setItemData(0, "Add to HOF only when you click Export HOF now.", QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._combo_hof_when.setItemData(1, "After each generation, add selected agents to the Hall of Fame.", QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._combo_hof_when.setItemData(2, "Add to HOF every N generations.", QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._spin_hof_every_n = QtWidgets.QSpinBox()
+        self._spin_hof_every_n.setRange(1, 999)
+        self._spin_hof_every_n.setValue(5)
+        self._spin_hof_every_n.setEnabled(False)
+
+        def _on_hof_when_changed() -> None:
+            self._spin_hof_every_n.setEnabled(self._combo_hof_when.currentIndex() == 2)
+        self._combo_hof_when.currentIndexChanged.connect(_on_hof_when_changed)
+        hof_when_row = QtWidgets.QHBoxLayout()
+        lbl_hof_when = QtWidgets.QLabel("HOF when:")
+        lbl_hof_when.setToolTip("When to add agents to the Hall of Fame.")
+        hof_when_row.addWidget(lbl_hof_when)
+        hof_when_row.addWidget(self._combo_hof_when)
+        hof_when_row.addSpacing(12)
+        lbl_hof_n = QtWidgets.QLabel("Every N gens:")
+        lbl_hof_n.setToolTip("Add to HOF every N generations (used when HOF when = Every N generations).")
+        hof_when_row.addWidget(lbl_hof_n)
+        hof_when_row.addWidget(self._spin_hof_every_n)
+        hof_when_row.addStretch()
+        hof_layout.addLayout(hof_when_row)
+        self._combo_hof_what = QtWidgets.QComboBox()
+        self._combo_hof_what.addItems(["Top N by ELO", "Top N by fitness", "Best agent only"])
+        self._combo_hof_what.setItemData(0, "Add the N agents with highest global ELO.", QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._combo_hof_what.setItemData(1, "Add the N agents with highest fitness (formula from Fitness panel).", QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._combo_hof_what.setItemData(2, "Add only the single best agent by ELO.", QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._spin_hof_top_n = QtWidgets.QSpinBox()
+        self._spin_hof_top_n.setRange(1, 999)
+        self._spin_hof_top_n.setValue(5)
+        self._spin_hof_top_n.setToolTip("Number of top agents to add (for Top N options).")
+
+        def _on_hof_what_changed() -> None:
+            self._spin_hof_top_n.setEnabled(self._combo_hof_what.currentIndex() != 2)
+        self._combo_hof_what.currentIndexChanged.connect(_on_hof_what_changed)
+        _on_hof_what_changed()
+        hof_what_row = QtWidgets.QFormLayout()
+        lbl_hof_what = QtWidgets.QLabel("HOF what:")
+        lbl_hof_what.setToolTip("Which agents to add to the Hall of Fame.")
+        hof_what_row.addRow(lbl_hof_what, self._combo_hof_what)
+        hof_what_row.addRow(QtWidgets.QLabel("N:"), self._spin_hof_top_n)
+        hof_layout.addLayout(hof_what_row)
+        btn_export_hof = QtWidgets.QPushButton("Export HOF now")
+        btn_export_hof.setToolTip("Export current Hall of Fame agents to a JSON file.")
+        btn_export_hof.clicked.connect(self._on_export_hof_now)
+        hof_layout.addWidget(btn_export_hof)
+        export_main_layout.addWidget(hof_widget, 1)
+
         next_layout.addWidget(self._next_export_frame)
         self._next_gen_insights = QtWidgets.QLabel("Population size: —  Composition: —")
         self._next_gen_insights.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
@@ -1307,6 +1510,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._update_next_gen_insights()
         self._update_tour_elo_enabled()
         self._update_tour_ppo_enabled()
+
+        self._connect_league_params_dirty()
 
         self._update_content_visibility()
 
@@ -1435,6 +1640,57 @@ class LeagueTabWidget(QtWidgets.QWidget):
             self._sexual_parent_with_replacement = dlg.get_with_replacement()
             self._sexual_parent_fitness_weighted = dlg.get_fitness_weighted()
             self._sexual_trait_combination = dlg.get_trait_combination()
+            self._mark_league_params_dirty()
+
+    def _mark_league_params_dirty(self) -> None:
+        """Mark league parameters as changed; show unsaved warning when a project is loaded."""
+        self._league_params_dirty = True
+        if self._state.project_path:
+            self._btn_unsaved_warning.setVisible(True)
+
+    def _clear_league_params_dirty(self) -> None:
+        """Clear dirty state and hide unsaved warning."""
+        self._league_params_dirty = False
+        self._btn_unsaved_warning.setVisible(False)
+
+    def _connect_league_params_dirty(self) -> None:
+        """Connect all league-parameter widgets to mark dirty when changed."""
+        league_config_widgets = [
+            self._combo_league_style,
+            self._combo_player_count,
+            self._spin_deals,
+            self._spin_matches,
+            self._spin_elo_k,
+            self._spin_elo_margin,
+            self._spin_ppo_top_k,
+            self._spin_ppo_updates,
+            self._spin_fitness_a,
+            self._spin_fitness_b,
+            self._spin_fitness_c,
+            self._spin_fitness_d,
+            self._spin_kept,
+            self._spin_mutate,
+            self._spin_clone,
+            self._spin_trait_prob,
+            self._spin_mut_std,
+            self._spin_generations,
+            self._spin_export_every_n,
+        ]
+        for w in league_config_widgets:
+            if hasattr(w, "valueChanged"):
+                w.valueChanged.connect(self._mark_league_params_dirty)
+            elif hasattr(w, "currentIndexChanged"):
+                w.currentIndexChanged.connect(self._mark_league_params_dirty)
+            elif hasattr(w, "currentTextChanged"):
+                w.currentTextChanged.connect(self._mark_league_params_dirty)
+        self._cb_elo_tuning.toggled.connect(self._mark_league_params_dirty)
+        self._cb_ppo.toggled.connect(self._mark_league_params_dirty)
+        self._combo_export_when.currentIndexChanged.connect(self._mark_league_params_dirty)
+        self._combo_export_what.currentIndexChanged.connect(self._mark_league_params_dirty)
+        self._combo_hof_when.currentIndexChanged.connect(self._mark_league_params_dirty)
+        self._combo_hof_what.currentIndexChanged.connect(self._mark_league_params_dirty)
+        self._spin_hof_every_n.valueChanged.connect(self._mark_league_params_dirty)
+        self._spin_hof_top_n.valueChanged.connect(self._mark_league_params_dirty)
 
     def _update_ga_visual(self) -> None:
         slots, kept_count, clone_slots, mutate_slots = self._get_repro_counts()
@@ -1525,12 +1781,84 @@ class LeagueTabWidget(QtWidgets.QWidget):
             return
         try:
             pop = self._state.build_population()
-            from tarot.persistence import population_to_json
             with open(path, "w", encoding="utf-8") as f:
                 f.write(population_to_json(pop))
             QtWidgets.QMessageBox.information(self, "Export", f"Exported to {path}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export failed", str(e))
+
+    def add_to_hof_from_population(
+        self, pop: Population, generation_index: int
+    ) -> None:
+        """
+        If HOF when is every gen or every N, select agents from pop by HOF what
+        (top N by ELO, top N by fitness, or best only) and append clones to state.hof_agents.
+        """
+        when_idx = self._combo_hof_when.currentIndex()
+        if when_idx == 0:
+            return
+        if when_idx == 2:
+            n = self._spin_hof_every_n.value()
+            if n <= 0 or generation_index % n != 0:
+                return
+        # Select agents to add
+        what_idx = self._combo_hof_what.currentIndex()
+        top_n = self._spin_hof_top_n.value() if what_idx != 2 else 1
+        agents_to_add: List[Agent] = []
+        if what_idx == 0:
+            # Top N by ELO
+            sorted_agents = sorted(
+                pop.agents.values(),
+                key=lambda a: a.elo_global,
+                reverse=True,
+            )
+            agents_to_add = sorted_agents[:top_n]
+        elif what_idx == 1:
+            # Top N by fitness
+            cfg = self.get_league_config()
+            def fitness_fn(a: Agent) -> float:
+                return compute_fitness(
+                    a,
+                    fitness_elo_a=cfg.fitness_elo_a,
+                    fitness_elo_b=cfg.fitness_elo_b,
+                    fitness_avg_c=cfg.fitness_avg_c,
+                    fitness_avg_d=cfg.fitness_avg_d,
+                )
+            sorted_agents = sorted(
+                pop.agents.values(),
+                key=fitness_fn,
+                reverse=True,
+            )
+            agents_to_add = sorted_agents[:top_n]
+        else:
+            # Best agent only (by ELO)
+            if pop.agents:
+                best = max(pop.agents.values(), key=lambda a: a.elo_global)
+                agents_to_add = [best]
+        # Clone with unique ids and append
+        for i, a in enumerate(agents_to_add):
+            new_id = f"{a.id}_gen{generation_index}_{i}"
+            clone = replace(a, id=new_id)
+            self._state.hof_agents.append(clone)
+
+    def _on_export_hof_now(self) -> None:
+        """Export current Hall of Fame agents to a JSON file."""
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export Hall of Fame", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            pop = Population()
+            for a in self._state.hof_agents:
+                pop.add(a)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(population_to_json(pop))
+            QtWidgets.QMessageBox.information(
+                self, "Export HOF", f"Exported {len(self._state.hof_agents)} agent(s) to {path}"
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Export HOF failed", str(e))
 
     def _update_player_count_options(self) -> None:
         """Gray out player count options that are not possible given total agents."""
@@ -1847,12 +2175,16 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._state.last_summary = summary
 
     def get_league_ui(self) -> Dict[str, object]:
-        """Return UI state (checkboxes, next-gen, export) for persistence."""
+        """Return UI state (checkboxes, next-gen, export, HOF) for persistence."""
         return {
             "num_generations": self._spin_generations.value(),
             "export_when_index": self._combo_export_when.currentIndex(),
             "export_every_n": self._spin_export_every_n.value(),
             "export_what_index": self._combo_export_what.currentIndex(),
+            "hof_when_index": self._combo_hof_when.currentIndex(),
+            "hof_every_n": self._spin_hof_every_n.value(),
+            "hof_what_index": self._combo_hof_what.currentIndex(),
+            "hof_top_n": self._spin_hof_top_n.value(),
             "elo_tuning_checked": self._cb_elo_tuning.isChecked(),
             "ppo_checked": self._cb_ppo.isChecked(),
         }
@@ -1873,6 +2205,18 @@ class LeagueTabWidget(QtWidgets.QWidget):
             idx = int(ui["export_what_index"])
             if 0 <= idx < self._combo_export_what.count():
                 self._combo_export_what.setCurrentIndex(idx)
+        if "hof_when_index" in ui:
+            idx = int(ui["hof_when_index"])
+            if 0 <= idx < self._combo_hof_when.count():
+                self._combo_hof_when.setCurrentIndex(idx)
+        if "hof_every_n" in ui:
+            self._spin_hof_every_n.setValue(int(ui["hof_every_n"]))
+        if "hof_what_index" in ui:
+            idx = int(ui["hof_what_index"])
+            if 0 <= idx < self._combo_hof_what.count():
+                self._combo_hof_what.setCurrentIndex(idx)
+        if "hof_top_n" in ui:
+            self._spin_hof_top_n.setValue(int(ui["hof_top_n"]))
         if "elo_tuning_checked" in ui:
             self._cb_elo_tuning.setChecked(bool(ui["elo_tuning_checked"]))
         if "ppo_checked" in ui:
@@ -1994,6 +2338,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._btns_no_project.setVisible(not has_project)
         self._no_project_row.setVisible(not has_project)
         self._btn_file.setVisible(has_project)
+        self._btn_save.setVisible(has_project)
+        self._btn_unsaved_warning.setVisible(has_project and self._league_params_dirty)
         self._act_save.setEnabled(has_project)
         self._act_save_as.setEnabled(has_project)
         self._act_export.setEnabled(has_project)
@@ -2068,6 +2414,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._state.project_path = path
         self._state.generation_index = 0
         self._state.last_summary = None
+        self._state.hof_agents = []
         try:
             project_save(
                 path,
@@ -2076,10 +2423,12 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 generation_index=0,
                 last_summary=None,
                 league_ui=self.get_league_ui(),
+                hof_agents=[],
             )
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Create failed", str(e))
             return
+        self._clear_league_params_dirty()
         self._refresh_table()
         self._update_project_label()
         self._update_content_visibility()
@@ -2155,6 +2504,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self.set_league_ui(data.get("league_ui") or {})
         self._state.generation_index = data["generation_index"]
         self._state.last_summary = data.get("last_summary")
+        self._state.hof_agents = data.get("hof_agents", [])
+        self._clear_league_params_dirty()
 
     def _on_save_project(self) -> None:
         path = self._state.project_path
@@ -2169,8 +2520,10 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 generation_index=self._state.generation_index,
                 last_summary=self._state.last_summary,
                 league_ui=self.get_league_ui(),
+                hof_agents=self._state.hof_agents,
             )
             self._update_project_label()
+            self._clear_league_params_dirty()
             QtWidgets.QMessageBox.information(self, "Save", f"Saved to {path}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Save failed", str(e))
@@ -2199,6 +2552,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
                 logs=logs,
                 project_dir=self._state.project_path,
                 league_ui=self.get_league_ui(),
+                hof_agents=self._state.hof_agents,
             )
             QtWidgets.QMessageBox.information(self, "Export", f"Exported to {path}")
         except Exception as e:
