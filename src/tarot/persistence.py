@@ -34,7 +34,10 @@ def _agent_to_dict(agent: Agent) -> Dict[str, Any]:
         "clone_only": agent.clone_only,
         "play_in_league": agent.play_in_league,
         "matches_played": agent.matches_played,
+        "matches_won": agent.matches_won,
         "total_match_score": agent.total_match_score,
+        "deals_played": agent.deals_played,
+        "deals_won": agent.deals_won,
     }
 
 
@@ -57,7 +60,10 @@ def _agent_from_dict(d: Dict[str, Any]) -> Agent:
         clone_only=bool(d.get("clone_only", False)),
         play_in_league=bool(d.get("play_in_league", True)),
         matches_played=int(d.get("matches_played", 0)),
+        matches_won=int(d.get("matches_won", 0)),
         total_match_score=float(d.get("total_match_score", 0.0)),
+        deals_played=int(d.get("deals_played", 0)),
+        deals_won=int(d.get("deals_won", 0)),
     )
 
 

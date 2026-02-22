@@ -70,10 +70,10 @@ def test_run_random_match_and_round_update_stats_and_elo():
             )
         )
 
-    # Single random match returns 4 totals
-    totals, steps = run_random_match_4p(num_deals=2, rng=rng)
+    # Single random match returns 4 totals and per-deal list
+    totals, per_deal = run_random_match_4p(num_deals=2, rng=rng)
     assert len(totals) == 4
-    assert steps == 1
+    assert len(per_deal) == 2
     assert sum(totals) == 0  # scoring invariants
 
     # Run one random round and ensure stats/ELOs change
@@ -85,8 +85,9 @@ def test_run_random_match_and_round_update_stats_and_elo():
 def test_run_match_for_table_with_random_agents():
     rng = random.Random(7)
     policies = [RandomAgent(seed=1), RandomAgent(seed=2), RandomAgent(seed=3), RandomAgent(seed=4)]
-    totals = run_match_for_table(player_count=4, num_deals=1, policies=policies, rng=rng)
+    totals, per_deal = run_match_for_table(player_count=4, num_deals=1, policies=policies, rng=rng)
     assert len(totals) == 4
+    assert len(per_deal) == 1
     assert abs(sum(totals)) < 1e-6  # scoring invariants: totals sum to 0
 
 
@@ -115,4 +116,14 @@ def test_run_round_with_policies_updates_stats_and_elo():
     )
     for agent in pop.agents.values():
         assert agent.matches_played >= 0
+
+    # run_round_with_policies returns game metrics
+    metrics = run_round_with_policies(
+        pop, player_count=4, num_deals=1, rng=rng, make_policy=make_policy,
+    )
+    assert "deals" in metrics
+    assert "petit_au_bout" in metrics
+    assert "grand_slem" in metrics
+    assert isinstance(metrics["deals"], int)
+    assert metrics["deals"] >= 0
 

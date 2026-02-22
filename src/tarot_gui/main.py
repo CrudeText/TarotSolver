@@ -9,10 +9,19 @@ with no real wiring to the backend yet.
 """
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 
+from .dashboard_blocks import (
+    ChartsAreaWidget,
+    ComputeBlockWidget,
+    ELOBlockWidget,
+    ExportBlockWidget,
+    GameMetricsBlockWidget,
+    RLPerformanceBlockWidget,
+)
 from .league_tab import (
     LeagueRunWorker,
     LeagueTabState,
@@ -21,6 +30,7 @@ from .league_tab import (
     _ResizeFilter,
     make_league_tab,
 )
+from .run_log import RunLogManager
 from tarot.league import LeagueRunControl
 from tarot.project import project_save
 from .themes import (
@@ -48,6 +58,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._league_worker: Optional[LeagueRunWorker] = None
         self._league_control: Optional[LeagueRunControl] = None
+        self._run_log_manager = RunLogManager()
 
         tabs = QtWidgets.QTabWidget()
 
@@ -56,8 +67,9 @@ class MainWindow(QtWidgets.QMainWindow):
             league_tab.open_project(DEFAULT_PROJECT_PATH)
         league_state = league_tab.state()
 
-        dashboard_tab, run_section = self._make_dashboard_tab(league_state)
+        dashboard_tab, run_section = self._make_dashboard_tab(league_state, self._run_log_manager)
         self._run_section = run_section
+        run_section.run_log_loaded.connect(self._on_run_log_loaded)
         self._league_tab = league_tab
         tabs.addTab(dashboard_tab, "Dashboard")
         tabs.addTab(league_tab, "League Parameters")
@@ -91,16 +103,69 @@ class MainWindow(QtWidgets.QMainWindow):
         label.setAlignment(QtCore.Qt.AlignCenter)
         return label
 
-    def _make_dashboard_tab(self, league_state: LeagueTabState) -> tuple[QtWidgets.QWidget, RunSectionWidget]:
+    def _dashboard_placeholder(self, title: str, min_height: int) -> QtWidgets.QWidget:
+        """One Dashboard block placeholder (QGroupBox with centered label)."""
+        box = QtWidgets.QGroupBox(title)
+        box.setMinimumHeight(min_height)
+        layout = QtWidgets.QVBoxLayout(box)
+        label = QtWidgets.QLabel(f"({title} — placeholder)")
+        label.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(label)
+        return box
+
+    def _make_dashboard_tab(
+        self,
+        league_state: LeagueTabState,
+        run_log_manager: RunLogManager,
+    ) -> tuple[QtWidgets.QWidget, RunSectionWidget]:
+        # Option C: fixed heights so tab fits in ~1000px viewport. Run box includes Run log (Save/Load). Order: Run, ELO, RL, Game, Compute, Export, Charts.
+        DASH_RUN_BAR = 160  # Run controls + status + log path row + Save/Load
+        DASH_ELO = 220  # summary + time series chart
+        DASH_RL = 95
+        DASH_GAME = 70
+        DASH_COMPUTE = 50
+        DASH_EXPORT = 50
+        DASH_CHARTS = 360
+
         inner = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(inner)
+        layout.setSpacing(8)
 
-        layout.addWidget(self._make_centered_label("Dashboard overview (placeholder)."))
-
-        run_section = RunSectionWidget(league_state)
+        # 1. Run bar (Start/Pause/Cancel, status, log path/name, Save/Load run log)
+        run_section = RunSectionWidget(league_state, run_log_manager=run_log_manager)
+        run_section.setMinimumHeight(DASH_RUN_BAR)
         layout.addWidget(run_section)
 
-        layout.addStretch(1)
+        # 2. ELO block (observational: min/mean/max/std + time series chart)
+        self._elo_block = ELOBlockWidget()
+        self._elo_block.setMinimumHeight(DASH_ELO)
+        layout.addWidget(self._elo_block)
+
+        # 3. RL performance block (Top-N, W/L, high risers)
+        self._rl_block = RLPerformanceBlockWidget()
+        self._rl_block.setMinimumHeight(DASH_RL)
+        layout.addWidget(self._rl_block)
+
+        # 4. Game metrics block (scope: League | Generation | Last N)
+        self._game_metrics_block = GameMetricsBlockWidget()
+        self._game_metrics_block.setMinimumHeight(DASH_GAME)
+        layout.addWidget(self._game_metrics_block)
+
+        # 5. Compute block (time used, ETA, avg time/gen)
+        self._compute_block = ComputeBlockWidget()
+        self._compute_block.setMinimumHeight(DASH_COMPUTE)
+        layout.addWidget(self._compute_block)
+
+        # 6. Export block (placeholder)
+        self._export_block = ExportBlockWidget()
+        self._export_block.setMinimumHeight(DASH_EXPORT)
+        layout.addWidget(self._export_block)
+
+        # 7. Charts area (ELO evolution, loaded logs checkboxes, banner, slider)
+        self._charts_area = ChartsAreaWidget()
+        self._charts_area.setMinimumHeight(DASH_CHARTS)
+        layout.addWidget(self._charts_area)
+
         scroll = self._wrap_tab_in_scroll(inner)
         return scroll, run_section
 
@@ -121,6 +186,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Population is empty. Add at least one group of agents in the League Parameters tab.",
             )
             return
+        self._run_log_manager.clear_current()
+        self._run_section.update_run_log_buttons()
+        self._elo_block.set_entries([])
+        self._rl_block.set_entries([])
+        self._game_metrics_block.set_entries([])
+        self._compute_block.clear_metrics()
+        self._charts_area.set_current_entries([])
+        self._run_start_time = time.time()
         cfg = self._league_tab.get_league_config()
         num_generations = self._league_tab.get_num_generations()
         control = LeagueRunControl()
@@ -150,7 +223,9 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             pop = population
         summary_dict = summary if isinstance(summary, dict) else {}
+        self._run_log_manager.append_generation(gen_idx, pop, summary_dict)
         self._league_tab.apply_population_from_run(pop, gen_idx, summary_dict)
+        self._league_tab.add_to_hof_from_population(pop, gen_idx)
         self._league_tab._refresh_table()
         self._league_tab._update_project_label()
         state = self._league_tab.state()
@@ -161,11 +236,48 @@ class MainWindow(QtWidgets.QMainWindow):
             generation_index=state.generation_index,
             last_summary=state.last_summary,
             league_ui=self._league_tab.get_league_ui(),
+            hof_agents=state.hof_agents,
         )
         self._run_section.update_metrics()
+        self._run_section.update_run_log_buttons()
+        # Update status line: Generation X of Y, Elapsed, ETA (only on generation done)
+        total_gens = self._league_tab.get_num_generations()
+        elapsed = time.time() - self._run_start_time
+        completed = gen_idx + 1
+        avg_time_per_gen = elapsed / completed if completed else 0.0
+        remaining = total_gens - completed
+        eta_sec = (remaining * avg_time_per_gen) if remaining > 0 else 0.0
+        # First gens: show ETA as "calculating…"; after that show real ETA
+        self._run_section.update_run_status(
+            gen_idx,
+            total_gens,
+            elapsed,
+            eta_sec if gen_idx >= 1 else None,
+        )
+        self._compute_block.update_metrics(
+            elapsed,
+            eta_sec if gen_idx >= 1 else None,
+            avg_time_per_gen,
+        )
+        entries = self._run_log_manager.get_current_entries()
+        self._elo_block.set_entries(entries)
+        self._rl_block.set_entries(entries)
+        self._game_metrics_block.set_entries(entries)
+        self._charts_area.set_current_entries(entries)
+        self._charts_area.set_loaded_logs([
+            (log.id, log.path, log.entries) for log in self._run_log_manager.get_loaded_logs()
+        ])
+
+    def _on_run_log_loaded(self, log_id: str) -> None:
+        """Update charts area when user loads a run log."""
+        self._charts_area.set_loaded_logs([
+            (log.id, log.path, log.entries) for log in self._run_log_manager.get_loaded_logs()
+        ])
 
     def _on_league_finished(self, cancelled: bool, paused: bool) -> None:
         self._run_section.set_buttons_running(False)
+        self._run_section.update_run_status(-1, 0, 0.0, None)
+        self._compute_block.clear_metrics()
         self._league_worker = None
         self._league_control = None
         if cancelled:

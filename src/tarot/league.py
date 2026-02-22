@@ -64,15 +64,18 @@ def _run_tournament_rounds(
     pop: Population,
     cfg: LeagueConfig,
     rng: random.Random,
-) -> None:
-    """Run tournament rounds in-place, updating ELOs and match stats."""
+) -> Dict[str, int]:
+    """Run tournament rounds in-place; return game metrics (deals, petit_au_bout, grand_slem)."""
     import torch
 
     def make_policy(agent: Agent):
         return policy_for_agent(agent, device=torch.device("cpu"))
 
+    total_deals = 0
+    total_petit = 0
+    total_grand_slem = 0
     for _ in range(cfg.rounds_per_generation):
-        run_round_with_policies(
+        metrics = run_round_with_policies(
             pop,
             player_count=cfg.player_count,
             num_deals=cfg.deals_per_match,
@@ -82,6 +85,10 @@ def _run_tournament_rounds(
             k_factor=cfg.elo_k_factor,
             margin_scale=cfg.elo_margin_scale,
         )
+        total_deals += metrics["deals"]
+        total_petit += metrics["petit_au_bout"]
+        total_grand_slem += metrics["grand_slem"]
+    return {"deals": total_deals, "petit_au_bout": total_petit, "grand_slem": total_grand_slem}
 
 
 def _ppo_finetune_top_agents(
@@ -165,7 +172,7 @@ def run_league_generation(
     rng = rng or random.Random()
 
     # 1) Tournament rounds
-    _run_tournament_rounds(pop, cfg, rng)
+    game_metrics = _run_tournament_rounds(pop, cfg, rng)
 
     # 2) Optional PPO fine-tuning
     _ppo_finetune_top_agents(pop, cfg, rng, checkpoint_base_dir=checkpoint_base_dir)
@@ -177,6 +184,9 @@ def run_league_generation(
         "elo_mean": sum(elos) / len(elos) if elos else 0.0,
         "elo_max": max(elos) if elos else 0.0,
         "num_agents": float(len(pop.agents)),
+        "deals": game_metrics["deals"],
+        "petit_au_bout": game_metrics["petit_au_bout"],
+        "grand_slem": game_metrics["grand_slem"],
     }
 
     # 3) GA evolution (optional)

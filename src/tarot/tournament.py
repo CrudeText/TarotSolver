@@ -25,6 +25,7 @@ from .env import (
     legal_action_mask_play_from_hand_and_legal_cards,
 )
 from .game import run_match_3p, run_match_4p, run_match_5p
+from .scoring import CHELEM_ANNOUNCED, CHELEM_NOT_ANNOUNCED
 
 
 AgentId = str
@@ -53,7 +54,10 @@ class Agent:
     play_in_league: bool = True
 
     matches_played: int = 0
+    matches_won: int = 0
     total_match_score: float = 0.0
+    deals_played: int = 0
+    deals_won: int = 0
 
     def record_match_score(self, score: float) -> None:
         self.matches_played += 1
@@ -185,43 +189,34 @@ def _random_play(state, player: int, rng: random.Random) -> Card:
     return rng.choice(legal)
 
 
-def run_random_match_4p(num_deals: int, rng: random.Random) -> Tuple[List[float], int]:
-    """
-    Run a random 4-player match directly via the engine; returns:
-      - per-player total match scores (length 4)
-      - dummy steps count (always 1, since we call run_match_4p once).
-    """
-
+def run_random_match_4p(num_deals: int, rng: random.Random):
+    """Run a random 4-player match. Returns (list of totals, per_deal list of (scores, taker_idx, outcome))."""
     def get_bid(player: int, history: List[Tuple[int, int | None]]) -> int | None:
         return _random_bid_4p(rng)
-
     def get_play(state, player: int) -> Card:
         return _random_play(state, player, rng)
+    totals, per_deal = run_match_4p(num_deals, get_bid, get_play, rng=rng)
+    return list(totals), per_deal
 
-    totals, _per_deal = run_match_4p(num_deals, get_bid, get_play, rng=rng)
-    return list(totals), 1
 
-
-def run_random_match_3p(num_deals: int, rng: random.Random) -> Tuple[List[float], int]:
+def run_random_match_3p(num_deals: int, rng: random.Random):
+    """Run a random 3-player match. Returns (list of totals, per_deal)."""
     def get_bid(player: int, history: List[Tuple[int, int | None]]) -> int | None:
         return _random_bid_4p(rng)
-
     def get_play(state, player: int) -> Card:
         return _random_play(state, player, rng)
+    totals, per_deal = run_match_3p(num_deals, get_bid, get_play, rng=rng)
+    return list(totals), per_deal
 
-    totals, _per_deal = run_match_3p(num_deals, get_bid, get_play, rng=rng)
-    return list(totals), 1
 
-
-def run_random_match_5p(num_deals: int, rng: random.Random) -> Tuple[List[float], int]:
+def run_random_match_5p(num_deals: int, rng: random.Random):
+    """Run a random 5-player match. Returns (list of totals, per_deal)."""
     def get_bid(player: int, history: List[Tuple[int, int | None]]) -> int | None:
         return _random_bid_4p(rng)
-
     def get_play(state, player: int) -> Card:
         return _random_play(state, player, rng)
-
-    totals, _per_deal = run_match_5p(num_deals, get_bid, get_play, rng=rng)
-    return list(totals), 1
+    totals, per_deal = run_match_5p(num_deals, get_bid, get_play, get_partner=None, rng=rng)
+    return list(totals), per_deal
 
 
 def run_round_random(
@@ -250,8 +245,16 @@ def run_round_random(
     tables = make_random_tables(pop.all_ids(), table_size=table_size, rng=rng)
     for table_ids in tables:
         agents = [pop.get(aid) for aid in table_ids]
-        totals, _ = run_match(num_deals, rng)
-        # Update stats and ELOs
+        totals, per_deal = run_match(num_deals, rng)
+        n = len(agents)
+        for agent in agents:
+            agent.deals_played += len(per_deal)
+        for _scores, taker_idx, (taker_made, _p, _c) in per_deal:
+            for i in range(n):
+                if (i == taker_idx and taker_made) or (i != taker_idx and not taker_made):
+                    agents[i].deals_won += 1
+        winner_idx = max(range(n), key=lambda i: totals[i])
+        agents[winner_idx].matches_won += 1
         for agent, score in zip(agents, totals):
             agent.record_match_score(score)
         update_elo_pairwise(agents, totals, player_count=player_count)
@@ -309,8 +312,8 @@ def run_match_for_table(
                 card = rng.choice(legal_cards)
             return card
 
-        totals, _ = run_match_4p(num_deals, get_bid, get_play, rng=rng)
-        return list(totals)
+        totals, per_deal = run_match_4p(num_deals, get_bid, get_play, rng=rng)
+        return list(totals), per_deal
 
     if player_count == 3:
 
@@ -332,8 +335,8 @@ def run_match_for_table(
                 card = rng.choice(legal_cards)
             return card
 
-        totals, _ = run_match_3p(num_deals, get_bid, get_play, rng=rng)
-        return list(totals)
+        totals, per_deal = run_match_3p(num_deals, get_bid, get_play, rng=rng)
+        return list(totals), per_deal
 
     if player_count == 5:
 
@@ -355,8 +358,8 @@ def run_match_for_table(
                 card = rng.choice(legal_cards)
             return card
 
-        totals, _ = run_match_5p(num_deals, get_bid, get_play, rng=rng)
-        return list(totals)
+        totals, per_deal = run_match_5p(num_deals, get_bid, get_play, get_partner=None, rng=rng)
+        return list(totals), per_deal
 
     raise ValueError(f"Unsupported player_count {player_count}; expected 3, 4, or 5.")
 
@@ -374,19 +377,17 @@ def run_round_with_policies(
     matchmaking_style: MatchmakingStyle = "random",
     k_factor: float = 32.0,
     margin_scale: float = 50.0,
-) -> None:
+) -> Dict[str, int]:
     """
     Run one tournament round using a per-Agent policy factory.
-
-    Each agent at a table is converted into a Policy via ``make_policy``; these
-    policies control all **play** decisions for that table. ELO and match stats
-    are updated exactly as in ``run_round_random``.
-
-    matchmaking_style: "random" (shuffle agents) or "elo" (stratify by ELO).
+    Returns round game metrics: {"deals": N, "petit_au_bout": N, "grand_slem": N}.
     """
     if player_count not in (3, 4, 5):
         raise ValueError(f"Unsupported player_count {player_count}; expected 3, 4, or 5.")
 
+    total_deals = 0
+    petit_au_bout = 0
+    grand_slem = 0
     table_size = player_count
     if matchmaking_style == "elo":
         tables = make_elo_stratified_tables(pop, table_size=table_size, rng=rng)
@@ -395,13 +396,28 @@ def run_round_with_policies(
     for table_ids in tables:
         table_agents = [pop.get(aid) for aid in table_ids]
         policies = [make_policy(a) for a in table_agents]
-        totals = run_match_for_table(player_count, num_deals, policies, rng)
+        totals, per_deal = run_match_for_table(player_count, num_deals, policies, rng)
+        n = len(table_agents)
+        for agent in table_agents:
+            agent.deals_played += len(per_deal)
+        for _scores, taker_idx, (taker_made, p, c) in per_deal:
+            total_deals += 1
+            if p is not None and p:
+                petit_au_bout += 1
+            if c in (CHELEM_ANNOUNCED, CHELEM_NOT_ANNOUNCED):
+                grand_slem += 1
+            for i in range(n):
+                if (i == taker_idx and taker_made) or (i != taker_idx and not taker_made):
+                    table_agents[i].deals_won += 1
+        winner_idx = max(range(n), key=lambda i: totals[i])
+        table_agents[winner_idx].matches_won += 1
         for agent, score in zip(table_agents, totals):
             agent.record_match_score(score)
         update_elo_pairwise(
             table_agents, totals, player_count=player_count,
             k_factor=k_factor, margin_scale=margin_scale,
         )
+    return {"deals": total_deals, "petit_au_bout": petit_au_bout, "grand_slem": grand_slem}
 
 
 __all__ = [

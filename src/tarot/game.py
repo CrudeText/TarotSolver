@@ -41,6 +41,9 @@ from .scoring import (
 )
 from .play import count_bouts_in_cards
 
+# Deal outcome for dashboard/tournament: taker made contract, petit au bout, chelem (grand schlem)
+DealOutcome = tuple[bool, bool | None, int]  # (taker_made, petit_au_bout_taker_side, chelem_points)
+
 
 def _lowest_value_card(cards: list[Card]) -> Card | None:
     """Pick a card 'sans valeur' (low point value) for Excuse exchange. Prefer 0.5 pt cards."""
@@ -259,7 +262,11 @@ def run_deal_4p(
         chelem_points=state.chelem_points,
         contract=state.contract,
     )
-    return mark_4p_with_taker(final_score, state.taker)
+    scores = mark_4p_with_taker(final_score, state.taker)
+    taker_made = final_score > 0
+    petit = state.petit_au_bout_taker if state.petit_au_bout_taker is not None else None
+    outcome: DealOutcome = (taker_made, petit, state.chelem_points)
+    return scores, outcome
 
 
 def play_one_deal_4p(
@@ -284,13 +291,13 @@ def play_one_deal_4p(
             return (0, 0, 0, 0), deal, None
     bidding = run_bidding_4p(deal.dealer, get_bid)
     if bidding is None:
-        return (0, 0, 0, 0), deal, None
-    scores = run_deal_4p(
+        return (0, 0, 0, 0), deal, None, (False, None, 0)
+    scores, outcome = run_deal_4p(
         deal, bidding, get_play, rng,
         get_poignee=get_poignee,
         get_chelem=get_chelem,
     )
-    return scores, deal, bidding
+    return scores, deal, bidding, outcome
 
 
 def run_match_4p(
@@ -300,26 +307,26 @@ def run_match_4p(
     rng: random.Random | None = None,
     get_poignee: Callable[[SingleDealState, int], tuple[int, int] | None] | None = None,
     get_chelem: Callable[[Deal4P, BiddingResult], int | None] | None = None,
-) -> tuple[tuple[int, int, int, int], list[tuple[int, int, int, int]]]:
+) -> tuple[tuple[int, int, int, int], list[tuple[tuple[int, int, int, int], int, DealOutcome]]]:
     """
     Run a match of num_deals. Dealer rotates 0->1->2->3->0. Redistributes if everyone passes or Petit sec.
-    Returns (total_p0, total_p1, total_p2, total_p3), list of per-deal scores.
+    Returns (totals, per_deal) where per_deal is list of (scores, taker_idx, outcome).
     """
     if rng is None:
         rng = random.Random()
     totals = [0, 0, 0, 0]
-    per_deal: list[tuple[int, int, int, int]] = []
+    per_deal: list[tuple[tuple[int, int, int, int], int, DealOutcome]] = []
     dealer = 0
     played = 0
     while played < num_deals:
-        scores, _deal, bidding = play_one_deal_4p(
+        scores, _deal, bidding, outcome = play_one_deal_4p(
             get_bid, get_play, dealer=dealer, rng=rng,
             get_poignee=get_poignee,
             get_chelem=get_chelem,
         )
         if bidding is None:
             continue
-        per_deal.append(scores)
+        per_deal.append((scores, bidding.taker, outcome))
         for i in range(4):
             totals[i] += scores[i]
         played += 1
@@ -529,7 +536,11 @@ def run_deal_3p(
         chelem_points=state.chelem_points,
         contract=state.contract,
     )
-    return mark_3p_with_taker(final_score, state.taker)
+    scores = mark_3p_with_taker(final_score, state.taker)
+    taker_made = final_score > 0
+    petit = state.petit_au_bout_taker if state.petit_au_bout_taker is not None else None
+    outcome: DealOutcome = (taker_made, petit, state.chelem_points)
+    return scores, outcome
 
 
 def play_one_deal_3p(
@@ -551,8 +562,8 @@ def play_one_deal_3p(
     deal = Deal3P(hands=deal.hands, chien=deal.chien, dealer=dealer)
     bidding = run_bidding_3p(deal.dealer, get_bid)
     if bidding is None:
-        return (0, 0, 0), deal, None
-    scores = run_deal_3p(
+        return (0, 0, 0), deal, None, (False, None, 0)
+    scores, outcome = run_deal_3p(
         deal,
         bidding,
         get_play,
@@ -560,7 +571,7 @@ def play_one_deal_3p(
         get_poignee=get_poignee,
         get_chelem=get_chelem,
     )
-    return scores, deal, bidding
+    return scores, deal, bidding, outcome
 
 
 def run_match_3p(
@@ -570,18 +581,18 @@ def run_match_3p(
     rng: random.Random | None = None,
     get_poignee: Callable[[SingleDealState3P, int], tuple[int, int] | None] | None = None,
     get_chelem: Callable[[Deal3P, BiddingResult], int | None] | None = None,
-) -> tuple[tuple[int, int, int], list[tuple[int, int, int]]]:
+) -> tuple[tuple[int, int, int], list[tuple[tuple[int, int, int], int, DealOutcome]]]:
     """
-    Run a 3-player match. Dealer rotates 0->1->2->0. Redistributes if everyone passes.
+    Run a 3-player match. Returns (totals, per_deal) with per_deal list of (scores, taker_idx, outcome).
     """
     if rng is None:
         rng = random.Random()
     totals = [0, 0, 0]
-    per_deal: list[tuple[int, int, int]] = []
+    per_deal: list[tuple[tuple[int, int, int], int, DealOutcome]] = []
     dealer = 0
     played = 0
     while played < num_deals:
-        scores, _deal, bidding = play_one_deal_3p(
+        scores, _deal, bidding, outcome = play_one_deal_3p(
             get_bid,
             get_play,
             dealer=dealer,
@@ -591,7 +602,7 @@ def run_match_3p(
         )
         if bidding is None:
             continue
-        per_deal.append(scores)
+        per_deal.append((scores, bidding.taker, outcome))
         for i in range(3):
             totals[i] += scores[i]
         played += 1
@@ -816,7 +827,11 @@ def run_deal_5p(
         chelem_points=state.chelem_points,
         contract=state.contract,
     )
-    return mark_5p_with_taker(final_score, state.taker, state.partner)
+    scores = mark_5p_with_taker(final_score, state.taker, state.partner)
+    taker_made = final_score > 0
+    petit = state.petit_au_bout_taker_side if state.petit_au_bout_taker_side is not None else None
+    outcome: DealOutcome = (taker_made, petit, state.chelem_points)
+    return scores, outcome
 
 
 def play_one_deal_5p(
@@ -845,13 +860,13 @@ def play_one_deal_5p(
     deal = Deal5P(hands=deal.hands, chien=deal.chien, dealer=dealer)
     bidding = run_bidding_5p(deal.dealer, get_bid)
     if bidding is None:
-        return (0, 0, 0, 0, 0), deal, None, None
+        return (0, 0, 0, 0, 0), deal, None, None, (False, None, 0)
 
     partner: int | None = None
     if get_partner is not None:
         partner = get_partner(deal, bidding)
 
-    scores = run_deal_5p(
+    scores, outcome = run_deal_5p(
         deal,
         bidding,
         partner,
@@ -860,7 +875,7 @@ def play_one_deal_5p(
         get_poignee=get_poignee,
         get_chelem=get_chelem,
     )
-    return scores, deal, bidding, partner
+    return scores, deal, bidding, partner, outcome
 
 
 def run_match_5p(
@@ -871,20 +886,18 @@ def run_match_5p(
     rng: random.Random | None = None,
     get_poignee: Callable[[SingleDealState5P, int], tuple[int, int] | None] | None = None,
     get_chelem: Callable[[Deal5P, BiddingResult], int | None] | None = None,
-) -> tuple[tuple[int, int, int, int, int], list[tuple[int, int, int, int, int]]]:
+) -> tuple[tuple[int, int, int, int, int], list[tuple[tuple[int, int, int, int, int], int, DealOutcome]]]:
     """
-    Run a 5-player match. Dealer rotates 0->1->2->3->4->0. Redistributes if everyone passes.
-
-    get_partner(deal, bidding) chooses partner per deal (2 vs 3) or None (1 vs 4).
+    Run a 5-player match. Returns (totals, per_deal) with per_deal list of (scores, taker_idx, outcome).
     """
     if rng is None:
         rng = random.Random()
     totals = [0, 0, 0, 0, 0]
-    per_deal: list[tuple[int, int, int, int, int]] = []
+    per_deal: list[tuple[tuple[int, int, int, int, int], int, DealOutcome]] = []
     dealer = 0
     played = 0
     while played < num_deals:
-        scores, _deal, bidding, _partner = play_one_deal_5p(
+        scores, _deal, bidding, _partner, outcome = play_one_deal_5p(
             get_bid,
             get_play,
             get_partner=get_partner,
@@ -896,7 +909,7 @@ def run_match_5p(
         if bidding is None:
             dealer = next_dealer_5p(dealer)
             continue
-        per_deal.append(scores)
+        per_deal.append((scores, bidding.taker, outcome))
         for i in range(5):
             totals[i] += scores[i]
         played += 1

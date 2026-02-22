@@ -111,6 +111,44 @@ def test_project_save_and_load_with_sexual_reproduction_params(tmp_path: Path) -
     assert ga.sexual_trait_combination == "crossover"
 
 
+def test_project_save_and_load_with_hof(tmp_path: Path) -> None:
+    """Save and load a project with Hall of Fame agents; they round-trip."""
+    groups = _make_groups_tuples()
+    cfg = LeagueConfig(
+        player_count=4,
+        deals_per_match=2,
+        rounds_per_generation=1,
+        ga_config=GAConfig(population_size=4, elite_fraction=0.25, mutation_prob=0.5, mutation_std=0.1),
+    )
+    hof = [
+        Agent(id="A0_hof_gen1_0", name="A0", player_counts=[4], elo_global=1600.0),
+        Agent(id="A1_hof_gen1_1", name="A1", player_counts=[4], elo_global=1580.0),
+    ]
+    project_save(
+        tmp_path,
+        groups=groups,
+        league_config=cfg,
+        generation_index=1,
+        last_summary={"elo_min": 1400, "elo_mean": 1500, "elo_max": 1600, "num_agents": 4.0},
+        hof_agents=hof,
+    )
+    data = project_load(tmp_path)
+    assert len(data["hof_agents"]) == 2
+    assert data["hof_agents"][0].id == "A0_hof_gen1_0"
+    assert data["hof_agents"][0].elo_global == 1600.0
+    assert data["hof_agents"][1].id == "A1_hof_gen1_1"
+
+
+def test_project_load_without_hof_agents(tmp_path: Path) -> None:
+    """Loading a project saved without hof_agents returns empty list."""
+    groups = _make_groups_tuples()
+    cfg = LeagueConfig(player_count=4, deals_per_match=1, ga_config=None)
+    project_save(tmp_path, groups=groups, league_config=cfg, generation_index=0)
+    data = project_load(tmp_path)
+    assert "hof_agents" in data
+    assert data["hof_agents"] == []
+
+
 def test_project_export_and_import_json(tmp_path: Path) -> None:
     groups = _make_groups_tuples()
     cfg = LeagueConfig(player_count=4, deals_per_match=1, ga_config=None)

@@ -139,6 +139,7 @@ def project_save(
     generation_index: int = 0,
     last_summary: Optional[Dict[str, float]] = None,
     league_ui: Optional[Dict[str, Any]] = None,
+    hof_agents: Optional[List[Agent]] = None,
 ) -> None:
     """
     Save project to directory.
@@ -150,6 +151,7 @@ def project_save(
         generation_index: Last completed generation (0 if not yet run).
         last_summary: Last ELO summary dict.
         league_ui: Optional UI state (checkboxes, export/next-gen params) to persist.
+        hof_agents: Optional list of agents in the Hall of Fame.
     """
     project_dir = Path(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -173,6 +175,13 @@ def project_save(
             "color": color,
         })
 
+    hof_data: List[Dict[str, Any]] = []
+    if hof_agents:
+        for a in hof_agents:
+            ad = _agent_to_dict(a)
+            _copy_checkpoint_into_project(project_dir, a, ad)
+            hof_data.append(ad)
+
     payload: Dict[str, Any] = {
         "schema_version": PROJECT_SCHEMA_VERSION,
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -183,6 +192,8 @@ def project_save(
     }
     if league_ui is not None:
         payload["league_ui"] = league_ui
+    if hof_data:
+        payload["hof_agents"] = hof_data
 
     with (project_dir / PROJECT_JSON).open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
@@ -210,6 +221,13 @@ def project_load(project_dir: Path | str) -> Dict[str, Any]:
             if a.checkpoint_path and not Path(a.checkpoint_path).is_absolute():
                 a.checkpoint_path = str((project_dir / a.checkpoint_path).resolve())
 
+    hof_agents: List[Agent] = []
+    for ad in payload.get("hof_agents", []):
+        a = _agent_from_dict(ad)
+        if a.checkpoint_path and not Path(a.checkpoint_path).is_absolute():
+            a.checkpoint_path = str((project_dir / a.checkpoint_path).resolve())
+        hof_agents.append(a)
+
     return {
         "groups_data": groups_data,
         "league_config": _league_config_from_dict(payload.get("league_config", {})),
@@ -217,6 +235,7 @@ def project_load(project_dir: Path | str) -> Dict[str, Any]:
         "last_summary": payload.get("last_summary"),
         "project_dir": project_dir,
         "league_ui": payload.get("league_ui"),
+        "hof_agents": hof_agents,
     }
 
 
@@ -230,6 +249,7 @@ def project_export_json(
     logs: Optional[List[Dict[str, Any]]] = None,
     project_dir: Optional[Path | str] = None,
     league_ui: Optional[Dict[str, Any]] = None,
+    hof_agents: Optional[List[Agent]] = None,
 ) -> None:
     """
     Export project to a single JSON file for easy sharing.
@@ -284,6 +304,8 @@ def project_export_json(
     }
     if league_ui is not None:
         payload["league_ui"] = league_ui
+    if hof_agents:
+        payload["hof_agents"] = [_agent_to_dict(a) for a in hof_agents]
 
     json_path.parent.mkdir(parents=True, exist_ok=True)
     with json_path.open("w", encoding="utf-8") as f:
@@ -306,6 +328,7 @@ def project_import_json(json_path: Path | str) -> Dict[str, Any]:
         raise ValueError("Not a Tarot project export JSON")
 
     groups_data = _groups_from_dict(payload.get("groups", []))
+    hof_agents = [_agent_from_dict(ad) for ad in payload.get("hof_agents", [])]
     return {
         "groups_data": groups_data,
         "league_config": _league_config_from_dict(payload.get("league_config", {})),
@@ -314,6 +337,7 @@ def project_import_json(json_path: Path | str) -> Dict[str, Any]:
         "project_dir": json_path.parent,
         "logs": payload.get("logs"),
         "league_ui": payload.get("league_ui"),
+        "hof_agents": hof_agents,
     }
 
 

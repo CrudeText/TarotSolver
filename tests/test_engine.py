@@ -79,7 +79,7 @@ def test_play_one_deal_random():
     def get_play(state: SingleDealState, player: int):
         legal = state.legal_cards(player)
         return rng.choice(legal)
-    scores, deal, bidding = play_one_deal_4p(get_bid, get_play, rng=rng)
+    scores, deal, bidding, _ = play_one_deal_4p(get_bid, get_play, rng=rng)
     if bidding is None:
         return
     assert len(scores) == 4
@@ -112,7 +112,7 @@ def test_poignee_chelem_callbacks():
         if n >= 10:
             return (10, 20)
         return None
-    scores, _, bidding = play_one_deal_4p(
+    scores, _, bidding, _ = play_one_deal_4p(
         get_bid, get_play, rng=rng,
         get_poignee=get_poignee,
         get_chelem=lambda d, b: None,
@@ -143,7 +143,7 @@ def test_poignee_3p_callbacks():
             return (13, 20)
         return None
 
-    scores, _, bidding = play_one_deal_3p(
+    scores, _, bidding, _ = play_one_deal_3p(
         get_bid,
         get_play,
         rng=rng,
@@ -164,7 +164,7 @@ def test_play_one_deal_3p_random():
     def get_play(state: SingleDealState3P, player: int):
         legal = state.legal_cards(player)
         return rng.choice(legal)
-    scores, deal, bidding = play_one_deal_3p(get_bid, get_play, rng=rng)
+    scores, deal, bidding, _ = play_one_deal_3p(get_bid, get_play, rng=rng)
     if bidding is None:
         return
     assert len(scores) == 3
@@ -220,7 +220,7 @@ def test_play_one_deal_5p_random_alone():
         return rng.choice(legal)
 
     # No partner callback => taker plays alone (1 vs 4)
-    scores, deal, bidding, partner = play_one_deal_5p(
+    scores, deal, bidding, partner, _ = play_one_deal_5p(
         get_bid,
         get_play,
         rng=rng,
@@ -252,7 +252,7 @@ def test_play_one_deal_5p_random_with_partner():
     def get_partner(deal, bidding):
         return 3
 
-    scores, deal, bidding, partner = play_one_deal_5p(
+    scores, deal, bidding, partner, _ = play_one_deal_5p(
         get_bid,
         get_play,
         rng=rng,

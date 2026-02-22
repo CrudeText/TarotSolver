@@ -25,8 +25,11 @@ from tarot_gui.league_tab import (
     GRP_COL_PLAY_IN_LEAGUE,
     LeagueTabState,
     LeagueTabWidget,
+    RunSectionWidget,
     make_league_tab,
+    _format_duration,
 )
+from tarot_gui.run_log import RunLogManager
 
 
 def test_league_tab_state():
@@ -197,3 +200,134 @@ def test_checkbox_persists_after_refresh():
     cb_clone2 = _get_checkbox(tab, 0, GRP_COL_CLONE_ONLY)
     assert cb_fixed2.isChecked()
     assert cb_clone2.isChecked()
+
+
+def test_add_to_hof_from_population():
+    """HOF when=Every generation, what=Best agent only: one agent added with unique id."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    tab = make_league_tab()
+    tab._combo_hof_when.setCurrentIndex(1)  # Every generation
+    tab._combo_hof_what.setCurrentIndex(2)   # Best agent only
+    pop = Population()
+    pop.add(Agent(id="a1", name="A1", player_counts=[4], elo_global=1400.0))
+    pop.add(Agent(id="a2", name="A2", player_counts=[4], elo_global=1600.0))
+    pop.add(Agent(id="a3", name="A3", player_counts=[4], elo_global=1500.0))
+    assert len(tab.state().hof_agents) == 0
+    tab.add_to_hof_from_population(pop, 0)
+    assert len(tab.state().hof_agents) == 1
+    hof_agent = tab.state().hof_agents[0]
+    assert hof_agent.elo_global == 1600.0
+    assert hof_agent.id == "a2_gen0_0"
+
+
+def test_add_to_hof_on_demand_only():
+    """HOF when=On demand only: no agents added during add_to_hof_from_population."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    tab = make_league_tab()
+    tab._combo_hof_when.setCurrentIndex(0)  # On demand only
+    pop = Population()
+    pop.add(Agent(id="a1", name="A1", player_counts=[4], elo_global=1600.0))
+    tab.add_to_hof_from_population(pop, 0)
+    assert len(tab.state().hof_agents) == 0
+
+
+def test_add_to_hof_top_n_by_elo():
+    """HOF what=Top N by ELO: N agents added with unique ids."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    tab = make_league_tab()
+    tab._combo_hof_when.setCurrentIndex(1)
+    tab._combo_hof_what.setCurrentIndex(0)  # Top N by ELO
+    tab._spin_hof_top_n.setValue(2)
+    pop = Population()
+    pop.add(Agent(id="x", name="X", player_counts=[4], elo_global=1000.0))
+    pop.add(Agent(id="y", name="Y", player_counts=[4], elo_global=1700.0))
+    pop.add(Agent(id="z", name="Z", player_counts=[4], elo_global=1500.0))
+    tab.add_to_hof_from_population(pop, 1)
+    assert len(tab.state().hof_agents) == 2
+    elos = [a.elo_global for a in tab.state().hof_agents]
+    assert elos == [1700.0, 1500.0]
+    assert tab.state().hof_agents[0].id == "y_gen1_0"
+    assert tab.state().hof_agents[1].id == "z_gen1_1"
+
+
+def test_run_section_widget_without_run_log_manager():
+    """RunSectionWidget works without run_log_manager; Save is disabled."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    state = LeagueTabState()
+    widget = RunSectionWidget(state, run_log_manager=None)
+    assert not widget._btn_save_run_log.isEnabled()
+    assert widget._run_log_manager is None
+
+
+def test_run_section_widget_with_run_log_manager_save_disabled_when_no_data():
+    """RunSectionWidget with RunLogManager and no data: Save disabled."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    state = LeagueTabState()
+    mgr = RunLogManager()
+    widget = RunSectionWidget(state, run_log_manager=mgr)
+    widget.update_run_log_buttons()
+    assert not widget._btn_save_run_log.isEnabled()
+
+
+def test_run_section_widget_with_run_log_manager_save_enabled_after_append():
+    """RunSectionWidget with RunLogManager: Save enabled after append_generation."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    state = LeagueTabState()
+    mgr = RunLogManager()
+    pop = Population()
+    pop.add(Agent(id="a", name="A", player_counts=[4], elo_global=1500.0))
+    summary = {"elo_min": 1500.0, "elo_mean": 1500.0, "elo_max": 1500.0, "num_agents": 1.0}
+    mgr.append_generation(0, pop, summary)
+    widget = RunSectionWidget(state, run_log_manager=mgr)
+    widget.update_run_log_buttons()
+    assert widget._btn_save_run_log.isEnabled()
+
+
+# --- Step 2: Run box status line ---
+
+
+def test_format_duration():
+    """Duration formatting for status line (M:SS and H:MM:SS)."""
+    assert _format_duration(0) == "0:00"
+    assert _format_duration(45) == "0:45"
+    assert _format_duration(90) == "1:30"
+    assert _format_duration(3661) == "1:01:01"
+    assert _format_duration(-1) == "0:00"
+
+
+def test_run_section_status_idle():
+    """Status line shows 'Status: —' when not running (gen_index < 0)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    state = LeagueTabState()
+    widget = RunSectionWidget(state, run_log_manager=None)
+    widget.update_run_status(-1, 0, 0.0, None)
+    assert widget._label_status.text() == "Status: —"
+
+
+def test_run_section_status_first_gen():
+    """Status line shows Generation 1 of Y, Elapsed, ETA 'calculating…' for first gen."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    state = LeagueTabState()
+    widget = RunSectionWidget(state, run_log_manager=None)
+    widget.update_run_status(0, 5, 10.5, None)
+    text = widget._label_status.text()
+    assert "Generation 1 of 5" in text
+    assert "Elapsed:" in text
+    assert "0:10" in text or "0:11" in text
+    assert "ETA:" in text
+    assert "calculating" in text
+
+
+def test_run_section_status_second_gen_with_eta():
+    """Status line shows real ETA when gen_index >= 1."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    state = LeagueTabState()
+    widget = RunSectionWidget(state, run_log_manager=None)
+    widget.update_run_status(1, 5, 60.0, 90.0)
+    text = widget._label_status.text()
+    assert "Generation 2 of 5" in text
+    assert "Elapsed:" in text
+    assert "1:00" in text
+    assert "ETA:" in text
+    assert "1:30" in text
+    assert "calculating" not in text

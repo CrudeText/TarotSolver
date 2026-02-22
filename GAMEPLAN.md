@@ -27,11 +27,11 @@ A project to train reinforcement learning models to play Tarot (3, 4, and 5 play
 | **3** | Baseline & validation | Random/rule-based agents, tests, human-playable CLI or minimal UI. | ✅ Implemented (random agent + tests). |
 | **4** | RL training pipeline | Training loop, reward design, checkpointing, evaluation. | ✅ Implemented (custom PyTorch PPO, CLI). |
 | **5** | Tournament system / league | Tables, matchmaking, GA, league orchestration. | ✅ Core backend implemented (CLI + JSON logs). |
-| **6** | GUI | Desktop GUI for league, agents, play vs AI, spectate. | 🚧 League tab functional (population, project, config); Dashboard/Agents/Play/Settings placeholder. |
+| **6** | GUI | Desktop GUI for league, agents, play vs AI, spectate. | 🚧 League tab + Dashboard tab functional; Agents/Play/Settings placeholder. |
 
 Phases 1–5 are implemented at the backend level; Phase 6 has a functional
 League tab (population management, project save/load, league and GA config)
-and placeholder tabs for Dashboard, Agents, Play, and Settings.
+and a functional Dashboard tab (run controls, ELO/Compute/RL/Game metrics blocks, run log, charts area). Agents, Play, and Settings remain placeholders.
 
 ---
 
@@ -330,7 +330,7 @@ repeated tournament rounds, optional PPO fine-tuning, and GA-based evolution.
 - **Tech (decision):** **Desktop** application (PySide6).
 - **Layout (Option C — viewport-bound):** Designed for **1080p** (1920×1080). Content width is bound to the viewport (no fixed 1920px) so there is no horizontal scroll. League tab: Project bar, Population block (with internal scroll for the table), arrow, then **two flow rows**: **Row 1** — Tournament | Next Generation (equal width); **Row 2** — Fitness | Reproduction (equal width). Fixed heights per flow row; population block has fixed height with table in an internal scroll area when many rows.
 - **Top-level sections:**
-  - **Dashboard:** Overview of current league, best agents, recent matches. **Run controls** (Start, Pause, Cancel) and **ELO metrics** live here, plus charts area.
+  - **Dashboard:** Primary tab during a run. Run controls (Start, Pause, Cancel), ELO (with stability/re-centering), RL performance (W/L, top agents, diversity, origin), game metrics (scope: league/generation), compute, export/HOF placeholders, charts, and run log (save/load for analysis). See §8.1.4 for blocks and layout.
   - **League Parameters:** Population (top), then two flow rows: **Tournament** | **Next Generation** (row 1), **Fitness** | **Reproduction** (row 2). Each box has a fixed height; Reproduction replaces the earlier "Mutation/Clone" label.
   - **Agents & Hall of Fame:** Browse agents, see generations, traits, ELOs.
   - **Custom Tables & Play:** Ad-hoc matches, spectate, play vs AI.
@@ -390,15 +390,77 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 - Fitness calculation (weights for global ELO, average match score) in Fitness box.
 - Optional: PPO budget (Tournament box: PPO fine-tuning checkbox, top-K, updates/agent).
 
-#### 8.1.4 Run controls and live metrics (Dashboard tab)
+#### 8.1.4 Dashboard tab — blocks, metrics, and run log
+
+**Goal:** The user can stay on the Dashboard for an entire run, with macro-level control and dense but clear metrics. All metrics are recorded in a **run log** that the user can save and later load in the same tab for analysis.
+
+**Layout (Option C, target 1920×1000):** Single column, vertical scroll only. Fixed heights for each block so the tab fits in the viewport at 1080p. Order top to bottom:
+
+| Order | Block | Purpose |
+|-------|--------|--------|
+| 1 | **Run bar** | Start | Pause at next generation | Cancel. One-line status: generation X of Y, elapsed time, ETA. |
+| 2 | **ELO block** | ELO metrics only (observational): min/mean/max, spread, optional small chart. User stabilizes ELO themselves (e.g. fixed_ELO reference populations). |
+| 3 | **RL performance block** | Top-N agents (ELO, W/L, avg score, high risers), diversity/origin summary. Reference for W/L (e.g. random 4p ≈ 25%). |
+| 4 | **Game metrics block** | Deals, cards, petit au bout, grand schlem, etc. Scope filter: League (run) / Generation / (future: match). Updated frequently. |
+| 5 | **Compute block** | Time used, time left (estimated), **average time per generation**. CPU/GPU later. |
+| 6 | **Export block** | Placeholder: "—" / N/A with tooltip "Configure in League Parameters" until League Parameters defines HOF/export. |
+| 7 | **Charts area** | ELO evolution, fitness, diversity (interactive; current run or loaded log). Same chart library as League tab. When logs loaded, checkbox to add each log to charts. |
+| — | **Run log** | Inside the **Run** box: Save run log, Load run log. **Multiple logs** can be loaded for comparison. Banner "Viewing saved run: …" when viewing loaded data. |
+
+**Decisions (locked)**
+
+- **Generations total:** From League Parameters currently loaded (League tab); all run parameters come from there.
+- **ETA:** `(total_gens - current_gen) * avg_time_per_gen`; first few gens show "—" or "calculating…".
+- **Compute block:** Shows time used, time left, and **average time per generation** (in addition to Run box status line).
+- **Save run log:** Enabled when there is run log data (current run or loaded log). **Load:** Multiple logs can be loaded for comparison; each loaded log can be toggled on/off for charts via a checkbox.
+- **ELO block:** Graph with ELO of agents/groups over time; side metrics: standard deviation, min, max. Time series first; optional small snapshot histogram on the side.
+- **RL performance:** Top-N default 10, user-configurable. **W/L:** User can view data at **deal level** and **match level** (both supported). Origin chart from start; per-trait variance over time chart as well.
+- **Game metrics:** Implement **petit au bout** and **grand schlem** counters in backend; optionally later add animation or "Event" overlay on charts. Scope filter: **League**, **Generation**, **Last N generations** (all three).
+- **Compute:** CPU/GPU implemented later.
+- **Export placeholder:** "—" / N/A with tooltip as above.
+- **Charts:** Same library as League tab; experiment later if needed. Banner when viewing saved run; checkboxes to add loaded logs to charts.
+- **Run log content:** Start with **per-agent** data in saved log; option to save summary only; eventually in **Settings** the user chooses exactly what is saved in a run log.
+- **Loaded log UI:** When data doesn’t include elapsed time, use **sliders** (e.g. generation slider) to navigate.
+
+**ELO block (observational only)**
+
+- **Objective:** ELO is a central way to evaluate agent level. The Dashboard shows **metrics only**; the user stabilizes ELO (e.g. fixed_ELO reference populations).
+- **Dashboard:** ELO graph (agents/groups over time); side metrics: min, max, std. Time series first; optional small snapshot histogram.
+
+**W/L (wins / losses)**
+
+- **Definition:** **Deal-level:** wins = deals where agent was on winning side; **match-level:** match won or lost. User can view **both** deal-level and match-level data in the UI.
+- **Reference:** e.g. “Random (4p) ≈ 25%.” Backend: add per-agent counters (e.g. `deals_won`, `deals_played`, `matches_won`, `matches_played`); tournament layer updates them.
+
+**Game metrics**
+
+- **Content:** Deals, cards, **petit au bout**, **grand schlem**. Scope filter: **League** | **Generation** | **Last N generations**. Backend implements petit au bout and grand schlem counters; run log stores them.
+
+**Compute**
+
+- Time used, time left, **average time per generation**. CPU/GPU later.
+
+**Export and Hall of Fame**
+
+- Placeholder until League Parameters defines it: show "—" / N/A with tooltip "Configure in League Parameters".
+
+**Run log (save / load)**
+
+- **During run:** Metrics written into in-memory run log. **Save:** user chooses path. **Load:** user can load **multiple** logs for comparison; checkboxes to include each in charts; banner "Viewing saved run: …".
+- **Content:** Start with per-agent snapshots; option for summary-only; eventually Settings controls what is saved.
+- **Run log state:** A dedicated **Dashboard state object** (e.g. RunLogManager) holds current run log and the list of loaded logs; MainWindow creates it and the Dashboard/Run box use it.
+- **High risers:** Computed **from the run log** (per-agent ELO per gen stored in log; Dashboard/analysis computes Δ ELO). Works for current run and any loaded log.
+- **File format:** **JSONL** (one line per generation); append-friendly for auto-save.
+- **Auto-save:** **Auto-save each generation** to a user-defined path and filename (user configures where and under what name to save log data; each gen we append one line to that file). User can also "Save run log" to a different path (e.g. copy/export).
+
+**Summary: Run controls and live metrics**
 
 - **Location:** Run controls live in the **Dashboard** tab (not League Parameters).
 - **Buttons:** Start | Pause at next generation | Cancel.
-- **Live metrics (updated during training):**
-  - ELO average, min, max.
-  - Ranking table (best agents by ELO, ELO gain, etc.).
-  - Charts (ELO evolution, fitness, diversity).
-- Tables and graphs are interactive during training (sort, filter, zoom, drill down).
+- **Live metrics (updated during training):** ELO block, RL performance (ranking, W/L, high risers, diversity/origin), game metrics (with scope filter), compute, export placeholders, charts, run log save/load.
+- Tables and graphs are interactive during training (sort, filter, zoom, drill down); same when viewing a loaded run log.
+
+**Implementation order:** See **`docs/dashboard-implementation.md`** for step-by-step tasks and decisions per block. Run log lives inside the Run box (Save/Load buttons). Placeholders and layout are in place; implement in order: run bar (status line), ELO block, RL performance, game metrics, compute, export, charts, run log wiring.
 
 #### 8.1.5 Export
 
@@ -665,7 +727,7 @@ Once these are clear, Phase 1 can start; the rest can be decided as we reach eac
      - Next Generation: Generations; Export section **always visible** (no Export checkbox) — Export when, Every N gens, Export what, Export now.
      - **Run controls (Dashboard):** `LeagueRunWorker` (QThread) runs `run_league_generations()`; Start/Pause/Cancel connected; per-generation state update, project save, log append, table refresh; Start enabled only when project loaded.
    - Next GUI tasks:
-     - Dashboard: live metrics (Gen X/Y, N agents, status line), charts (ELO evolution, fitness, diversity), ranking table, overview.
+     - Dashboard: ✅ Live metrics (Gen X/Y, status line), ELO block, Compute block, RL Top-N table (W/L, Δ ELO), Game metrics (scope + deals/petit/grand schlem), Export placeholder, Charts area (ELO evolution, loaded logs, slider). Optional later: origin chart, per-trait variance, fitness/diversity series, zoom/pan.
      - Export during run: respect Export when/what in generation callback.
      - Implement basic Agents list from league logs plus Hall-of-Fame view.
      - Add a simple Play flow using existing engine/env policies (e.g. run one match, show textual summary).
@@ -675,30 +737,17 @@ Once these are clear, Phase 1 can start; the rest can be decided as we reach eac
 
 ### Dashboard — next session ideas
 
-Planned work for the Dashboard tab (see §8.1.4 Run controls and live metrics). Suggested order:
+Dashboard tab is implemented (see `docs/dashboard-implementation.md` for current state). Done: run controls, status line, run log Save/Load + JSONL + multiple loaded logs, ELO block (summary + time series), Compute block, RL performance (Top-N, W/L, Δ ELO), Game metrics (scope + deals/petit au bout/grand schlem), Export placeholder, Charts area (ELO evolution, loaded-log checkboxes, banner, generation slider). Backend: Agent has deals_won/deals_played/matches_won; game returns deal outcome; league summary includes game_metrics; run log entries include optional game_metrics.
 
-1. ~~**Run controls wiring (highest priority)**~~ **Done.**
-   - ~~Implement `LeagueRunWorker` (QThread) to run `run_league_generations()` off the main thread.~~
-   - ~~Connect Start / Pause / Cancel to worker. Use `LeagueRunControl` for Cancel; Pause = stop iterating after current generation.~~
-   - ~~Emit signal per generation → update state, save project, append log, refresh UI.~~
-   - ~~Require loaded project before Start is enabled.~~
-2. **Live metrics**
-   - Expand ELO display: min / mean / max (already present), add Gen X/Y, N agents.
-   - Status line: Idle, Running, Paused, Completed.
-   - Fixed layout for 1080p (compact run section, charts area below).
-3. **Charts**
-   - **ELO evolution:** X = generation, Y = ELO; plot min/mean/max curves from `load_league_log(project_dir)`. Update live during run.
-   - **Fitness over generations:** requires extending log with fitness_min/mean/max per generation.
-   - **Diversity:** ELO spread (max−min) or trait variance; may need log extension.
-4. **Ranking table**
-   - Top agents: rank, name, generation, global ELO, ELO 3p/4p/5p, fitness, matches, avg score.
-   - Sort by ELO descending. Data from `state.build_population()`.
-5. **Overview**
-   - Summary: project name, generations completed, population size, best ELO, best agent.
-   - Recent matches (later): requires match-result persistence.
+**Optional / later:**
+- Origin chart and per-trait variance over time (RL block).
+- Fitness / diversity series in Charts area (log extension).
+- Reference line e.g. "Random (4p) ≈ 25%" in RL block.
+- Zoom/pan and richer tooltips on charts.
+- "Cards" in game metrics; event overlay on charts.
 
-**Data:** `load_league_log()` gives per-generation `elo_min/mean/max`, `num_agents`, `timestamp`. Agents have `elo_global`, `matches_played`, `total_match_score`, `generation`, etc.
+**Other next-session GUI:** Export during run (respect Export when/what); Agents list + HOF view; simple Play flow.
 
 ---
 
-*Document version: 1.16 — Reproduction: free adjustment (no cross-adjustment; only clamp changed field so total ≤ slots); _get_repro_counts returns actual spinbox values. Bar: gap (unassigned) on the **left**, then sexual/mutated/cloned; warning icon when not full. Gearbox: weighting (row 1), with-replacement **checkbox** (row 2), trait combination; tooltips on all. §7.4.2: gap on left, inter-generational population change (future). Next: live metrics, charts, ranking table, overview.*
+*Document version: 1.17 — Dashboard tab implemented: run box (status, run log Save/Load), ELO block, Compute block, RL performance (Top-N, W/L, Δ ELO), Game metrics (scope + deals/petit/grand schlem), Export placeholder, Charts area (ELO evolution, loaded logs, slider). Backend: Agent W/L, game deal outcome, run log game_metrics. See docs/dashboard-implementation.md. Next: optional origin/variance charts; Export during run; Agents/Play.*
