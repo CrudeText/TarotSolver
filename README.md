@@ -97,13 +97,13 @@ See the API for `play_one_deal_4p`, `run_match_4p`, `run_league_generation`, etc
 
 #### League tab (screenshots)
 
-Top of the League Parameters tab:
+Population & Agent Generator (top of the League Parameters tab): the **Project + Population** panel used to build and manage the league population. The tools row (`Count`, **Add random**, **Import**, **Augment from selection**, **Clear selected**) sits above the groups table; on the left, a population pie chart with metrics and a *Group by* dropdown; on the right, the groups table with flags (`GA parent`, `Fixed ELO`, `Clone only`, `Play in league`), group names, agent counts, sources and ELO stats.
 
-![League Parameters tab — top](images/League%20Parameters%20Example.png)
+![League Parameters tab — population & agent generator](images/Population%20Generator%20Example.png)
 
-Bottom of the League Parameters tab:
+League configuration & GA/RL parameters (bottom of the League Parameters tab): the **Tournament**, **Next Generation**, **Fitness** and **Reproduction** boxes where you configure player count and matchmaking, deals and matches per generation, optional PPO fine‑tuning, fitness weights (ELO vs average score), GA reproduction counts (sexual/mutated/cloned, with gearbox options), mutation settings, number of generations, and export policy for saving populations over time.
 
-![League Parameters tab — bottom](images/Population%20Generator%20Example.png)
+![League Parameters tab — league configuration](images/League%20Parameters%20Example.png)
 
 ---
 
