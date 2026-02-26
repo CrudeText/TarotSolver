@@ -13,10 +13,10 @@ import time
 from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
+from pathlib import Path
 
 from .dashboard_blocks import (
     ChartsAreaWidget,
-    ComputeBlockWidget,
     ELOBlockWidget,
     ExportBlockWidget,
     GameMetricsBlockWidget,
@@ -30,6 +30,7 @@ from .league_tab import (
     _ResizeFilter,
     make_league_tab,
 )
+from .project_dialog import OpenProjectDialog
 from .run_log import RunLogManager
 from tarot.league import LeagueRunControl
 from tarot.project import project_save
@@ -70,7 +71,10 @@ class MainWindow(QtWidgets.QMainWindow):
         dashboard_tab, run_section = self._make_dashboard_tab(league_state, self._run_log_manager)
         self._run_section = run_section
         run_section.run_log_loaded.connect(self._on_run_log_loaded)
+        run_section.load_population_clicked.connect(self._on_load_population_clicked)
         self._league_tab = league_tab
+        # Configure auto-save location based on initial project, if any.
+        self._run_section.configure_auto_save_for_project(league_state.project_path)
         tabs.addTab(dashboard_tab, "Dashboard")
         tabs.addTab(league_tab, "League Parameters")
         tabs.addTab(self._make_agents_tab(), "Agents")
@@ -118,50 +122,49 @@ class MainWindow(QtWidgets.QMainWindow):
         league_state: LeagueTabState,
         run_log_manager: RunLogManager,
     ) -> tuple[QtWidgets.QWidget, RunSectionWidget]:
-        # Option C: fixed heights so tab fits in ~1000px viewport. Run box includes Run log (Save/Load). Order: Run, ELO, RL, Game, Compute, Export, Charts.
-        DASH_RUN_BAR = 160  # Run controls + status + log path row + Save/Load
-        DASH_ELO = 220  # summary + time series chart
-        DASH_RL = 95
-        DASH_GAME = 70
-        DASH_COMPUTE = 50
-        DASH_EXPORT = 50
-        DASH_CHARTS = 360
+        # Option C: fixed heights so tab fits in ~1000px viewport (with scrolling).
+        # Increased a bit to give controls more vertical breathing room.
+        # Order: Run (with File box), ELO/RL, Game, Export, Charts.
+        DASH_RUN_BAR = 200  # Run controls + status + inline compute + File box
+        DASH_ELO = 260  # summary + time series chart
+        DASH_RL = 150
+        DASH_GAME = 110
+        DASH_EXPORT = 90
+        DASH_CHARTS = 400
 
         inner = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(inner)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
 
-        # 1. Run bar (Start/Pause/Cancel, status, log path/name, Save/Load run log)
+        # 1. Run bar (Start/Pause/Cancel, status, inline compute, log file name + File box)
         run_section = RunSectionWidget(league_state, run_log_manager=run_log_manager)
         run_section.setMinimumHeight(DASH_RUN_BAR)
         layout.addWidget(run_section)
 
         # 2. ELO block (observational: min/mean/max/std + time series chart)
+        row_elo_rl = QtWidgets.QHBoxLayout()
         self._elo_block = ELOBlockWidget()
         self._elo_block.setMinimumHeight(DASH_ELO)
-        layout.addWidget(self._elo_block)
+        row_elo_rl.addWidget(self._elo_block, 1)
 
         # 3. RL performance block (Top-N, W/L, high risers)
         self._rl_block = RLPerformanceBlockWidget()
         self._rl_block.setMinimumHeight(DASH_RL)
-        layout.addWidget(self._rl_block)
+        row_elo_rl.addWidget(self._rl_block, 1)
+        layout.addLayout(row_elo_rl)
 
         # 4. Game metrics block (scope: League | Generation | Last N)
         self._game_metrics_block = GameMetricsBlockWidget()
         self._game_metrics_block.setMinimumHeight(DASH_GAME)
         layout.addWidget(self._game_metrics_block)
 
-        # 5. Compute block (time used, ETA, avg time/gen)
-        self._compute_block = ComputeBlockWidget()
-        self._compute_block.setMinimumHeight(DASH_COMPUTE)
-        layout.addWidget(self._compute_block)
-
-        # 6. Export block (placeholder)
+        # 5. Export block (placeholder)
         self._export_block = ExportBlockWidget()
         self._export_block.setMinimumHeight(DASH_EXPORT)
         layout.addWidget(self._export_block)
 
-        # 7. Charts area (ELO evolution, loaded logs checkboxes, banner, slider)
+        # 6. Charts area (ELO evolution, loaded logs checkboxes, banner, slider)
         self._charts_area = ChartsAreaWidget()
         self._charts_area.setMinimumHeight(DASH_CHARTS)
         layout.addWidget(self._charts_area)
@@ -191,7 +194,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._elo_block.set_entries([])
         self._rl_block.set_entries([])
         self._game_metrics_block.set_entries([])
-        self._compute_block.clear_metrics()
+        self._run_section.clear_compute_metrics()
         self._charts_area.set_current_entries([])
         self._run_start_time = time.time()
         cfg = self._league_tab.get_league_config()
@@ -254,7 +257,7 @@ class MainWindow(QtWidgets.QMainWindow):
             elapsed,
             eta_sec if gen_idx >= 1 else None,
         )
-        self._compute_block.update_metrics(
+        self._run_section.update_compute_metrics(
             elapsed,
             eta_sec if gen_idx >= 1 else None,
             avg_time_per_gen,
@@ -274,10 +277,44 @@ class MainWindow(QtWidgets.QMainWindow):
             (log.id, log.path, log.entries) for log in self._run_log_manager.get_loaded_logs()
         ])
 
+    def _on_load_population_clicked(self) -> None:
+        """Handle 'Load League Project' from the Dashboard File box."""
+        base = get_projects_folder()
+        if not base:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Projects folder not set",
+                "No Projects folder is configured.\n\n"
+                "Go to the Settings tab, set a Projects folder, then try again.",
+            )
+            return
+        base_path = Path(base)
+        if not base_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Projects folder unavailable",
+                "The Projects folder does not exist:\n"
+                f"{base}\n\n"
+                "Please go to the Settings tab, choose a valid Projects folder,\n"
+                "and try again.",
+            )
+            return
+        dlg = OpenProjectDialog(str(base_path), self)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        path = dlg.result_path()
+        if not path:
+            return
+        if self._league_tab.open_project(path, show_message=True):
+            # Refresh state + auto-save config
+            state = self._league_tab.state()
+            self._run_section.update_start_enabled()
+            self._run_section.configure_auto_save_for_project(state.project_path)
+
     def _on_league_finished(self, cancelled: bool, paused: bool) -> None:
         self._run_section.set_buttons_running(False)
         self._run_section.update_run_status(-1, 0, 0.0, None)
-        self._compute_block.clear_metrics()
+        self._run_section.clear_compute_metrics()
         self._league_worker = None
         self._league_control = None
         if cancelled:

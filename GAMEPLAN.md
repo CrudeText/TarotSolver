@@ -398,14 +398,14 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 
 | Order | Block | Purpose |
 |-------|--------|--------|
-| 1 | **Run bar** | Start | Pause at next generation | Cancel. One-line status: generation X of Y, elapsed time, ETA. |
-| 2 | **ELO block** | ELO metrics only (observational): min/mean/max, spread, optional small chart. User stabilizes ELO themselves (e.g. fixed_ELO reference populations). |
-| 3 | **RL performance block** | Top-N agents (ELO, W/L, avg score, high risers), diversity/origin summary. Reference for W/L (e.g. random 4p ≈ 25%). |
-| 4 | **Game metrics block** | Deals, cards, petit au bout, grand schlem, etc. Scope filter: League (run) / Generation / (future: match). Updated frequently. |
-| 5 | **Compute block** | Time used, time left (estimated), **average time per generation**. CPU/GPU later. |
+| 1 | **Run bar** | Start | Pause at next generation | Cancel. One-line status: generation X of Y, elapsed time, ETA. Directly under the status line, an inline **Compute** section shows time used, ETA, and average time per generation. |
+| 2 | **File box** | Project-aware file controls. **Load League Project** opens an existing project (same projects list as League Parameters, but without Create). When a project is loaded, the log auto-save directory is set to that project’s `logs/` folder and only the **log file name** is editable. **Browse Logs** scans all projects under the configured Projects folder and lists their `*.jsonl` run logs so the user can select and load past runs for comparison. Save / Load run log buttons remain here. |
+| 3 | **ELO block** | ELO metrics only (observational): min/mean/max, spread, optional small chart. User stabilizes ELO themselves (e.g. fixed_ELO reference populations). |
+| 4 | **RL performance block** | Top-N agents (ELO, W/L, avg score, high risers), diversity/origin summary. Reference for W/L (e.g. random 4p ≈ 25%). Placed on the same row as the ELO block with equal width. |
+| 5 | **Game metrics block** | Deals, cards, petit au bout, grand schlem, etc. Scope filter: League (run) / Generation / (future: match). Updated frequently. |
 | 6 | **Export block** | Placeholder: "—" / N/A with tooltip "Configure in League Parameters" until League Parameters defines HOF/export. |
 | 7 | **Charts area** | ELO evolution, fitness, diversity (interactive; current run or loaded log). Same chart library as League tab. When logs loaded, checkbox to add each log to charts. |
-| — | **Run log** | Inside the **Run** box: Save run log, Load run log. **Multiple logs** can be loaded for comparison. Banner "Viewing saved run: …" when viewing loaded data. |
+| — | **Run log** | Lives in the **File** box: Save run log, Load run log, plus logs chosen via Browse Logs. **Multiple logs** can be loaded for comparison. Banner "Viewing saved run: …" when viewing loaded data. |
 
 **Decisions (locked)**
 
@@ -444,14 +444,14 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 
 - Placeholder until League Parameters defines it: show "—" / N/A with tooltip "Configure in League Parameters".
 
-**Run log (save / load)**
+**Run log (save / load / browse)**
 
-- **During run:** Metrics written into in-memory run log. **Save:** user chooses path. **Load:** user can load **multiple** logs for comparison; checkboxes to include each in charts; banner "Viewing saved run: …".
+- **During run:** Metrics written into in-memory run log. **Auto-save:** when a League project is loaded, the Dashboard sets auto-save to that project’s `logs/` folder and only the log file name is user-configurable. **Save:** the user can still export the current run log to any path. **Load/Browse:** the user can load **multiple** logs for comparison; Browse Logs scans all projects under the configured Projects folder and lists their log files; each loaded log can be toggled on/off for charts; banner "Viewing saved run: …".
 - **Content:** Start with per-agent snapshots; option for summary-only; eventually Settings controls what is saved.
-- **Run log state:** A dedicated **Dashboard state object** (e.g. RunLogManager) holds current run log and the list of loaded logs; MainWindow creates it and the Dashboard/Run box use it.
+- **Run log state:** A dedicated **Dashboard state object** (e.g. RunLogManager) holds current run log and the list of loaded logs; MainWindow creates it and the Dashboard/Run/File boxes use it.
 - **High risers:** Computed **from the run log** (per-agent ELO per gen stored in log; Dashboard/analysis computes Δ ELO). Works for current run and any loaded log.
 - **File format:** **JSONL** (one line per generation); append-friendly for auto-save.
-- **Auto-save:** **Auto-save each generation** to a user-defined path and filename (user configures where and under what name to save log data; each gen we append one line to that file). User can also "Save run log" to a different path (e.g. copy/export).
+- **Auto-save:** On each generation, append one JSON line to `<project_dir>/logs/<log_file_name>` when a League project is loaded (Dashboard configures this automatically based on the current project and editable log file name). The user can still "Save run log" to a different path (e.g. copy/export).
 
 **Summary: Run controls and live metrics**
 

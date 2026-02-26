@@ -175,3 +175,90 @@ class NewProjectDialog(QtWidgets.QDialog):
     def result_path(self) -> Optional[str]:
         """Return the chosen project path, or None if cancelled."""
         return self._result_path
+
+
+class OpenProjectDialog(QtWidgets.QDialog):
+    """
+    Dialog for opening an existing project only (no Create option).
+
+    Used from the Dashboard "Load League Project" action.
+    """
+
+    def __init__(
+        self,
+        projects_folder: str,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._projects_folder = Path(projects_folder)
+        self._result_path: Optional[str] = None
+        self.setWindowTitle("Open Project")
+        self.setMinimumSize(450, 320)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Projects folder (read-only)
+        folder_group = QtWidgets.QGroupBox("Projects folder")
+        folder_layout = QtWidgets.QVBoxLayout(folder_group)
+        self._label_folder = QtWidgets.QLabel(str(self._projects_folder))
+        self._label_folder.setWordWrap(True)
+        self._label_folder.setStyleSheet("color: #888; font-size: 11px;")
+        folder_layout.addWidget(self._label_folder)
+        layout.addWidget(folder_group)
+
+        # Existing projects list
+        list_group = QtWidgets.QGroupBox("Existing projects")
+        list_layout = QtWidgets.QVBoxLayout(list_group)
+        self._list = QtWidgets.QListWidget()
+        self._list.setMinimumHeight(140)
+        self._list.itemDoubleClicked.connect(self._on_open_selected)
+        self._refresh_list()
+        list_layout.addWidget(self._list)
+        layout.addWidget(list_group)
+
+        # Buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.addStretch(1)
+        self._btn_open = QtWidgets.QPushButton("Open selected")
+        self._btn_open.clicked.connect(self._on_open_selected)
+        self._btn_open.setEnabled(False)
+        self._list.itemSelectionChanged.connect(
+            lambda: self._btn_open.setEnabled(
+                bool(self._list.currentItem() and self._list.currentItem().flags() & QtCore.Qt.ItemFlag.ItemIsEnabled)
+            )
+        )
+        btn_layout.addWidget(self._btn_open)
+        btn_cancel = QtWidgets.QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+
+    def _refresh_list(self) -> None:
+        self._list.clear()
+        projects = _list_existing_projects(self._projects_folder)
+        if not projects:
+            item = QtWidgets.QListWidgetItem(
+                "No Projects in Projects folder.\n"
+                "Change Projects folder in Settings, or create a new project in the League Parameters tab."
+            )
+            item.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
+            self._list.addItem(item)
+            return
+        for name in projects:
+            self._list.addItem(name)
+
+    def _on_open_selected(self) -> None:
+        item = self._list.currentItem()
+        if not item or not (item.flags() & QtCore.Qt.ItemFlag.ItemIsEnabled):
+            return
+        name = item.text()
+        path = self._projects_folder / name
+        if path.exists() and (path / PROJECT_JSON).exists():
+            self._result_path = str(path)
+            self.accept()
+
+    def result_path(self) -> Optional[str]:
+        """Return the chosen project path, or None if cancelled."""
+        return self._result_path

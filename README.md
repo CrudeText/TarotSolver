@@ -95,6 +95,16 @@ See the API for `play_one_deal_4p`, `run_match_4p`, `run_league_generation`, etc
 - **Dashboard** — Run controls (Start, Pause at next generation, Cancel); ELO min/mean/max; project required to start. Charts and ranking table planned.
 - **Agents, Play, Settings** — Placeholders for later phases.
 
+#### League tab (screenshots)
+
+Top of the League Parameters tab:
+
+![League Parameters tab — top](images/League%20Parameters%20Example.png)
+
+Bottom of the League Parameters tab:
+
+![League Parameters tab — bottom](images/Population%20Generator%20Example.png)
+
 ---
 
 ## Tests

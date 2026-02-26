@@ -22,7 +22,7 @@ from tarot.project import (
     project_load,
     project_save,
 )
-from tarot_gui.project_dialog import NewProjectDialog
+from tarot_gui.project_dialog import NewProjectDialog, OpenProjectDialog, _list_existing_projects
 from tarot_gui.themes import get_projects_folder
 from tarot_gui.charts import (
     FitnessVisualWidget,
@@ -53,6 +53,7 @@ from tarot.project import get_checkpoint_base_dir, get_log_path
 from tarot.tournament import Agent, Population
 
 from .run_log import RunLogManager
+from .dashboard_blocks import ComputeBlockWidget
 
 
 def _format_duration(seconds: float) -> str:
@@ -551,6 +552,7 @@ class RunSectionWidget(QtWidgets.QWidget):
     pause_clicked = QtCore.Signal()
     cancel_clicked = QtCore.Signal()
     run_log_loaded = QtCore.Signal(str)  # log_id when a run log file is loaded
+    load_population_clicked = QtCore.Signal()
 
     def __init__(
         self,
@@ -561,7 +563,11 @@ class RunSectionWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._state = state
         self._run_log_manager = run_log_manager
-        layout = QtWidgets.QVBoxLayout(self)
+        self._auto_save_dir: Optional[str] = None
+
+        layout = QtWidgets.QHBoxLayout(self)
+
+        # --- Run box: Start / Pause / Cancel + status + compute ---
         run_group = QtWidgets.QGroupBox("Run")
         run_layout = QtWidgets.QVBoxLayout(run_group)
         buttons_row = QtWidgets.QHBoxLayout()
@@ -578,31 +584,44 @@ class RunSectionWidget(QtWidgets.QWidget):
         buttons_row.addWidget(self._btn_cancel)
         buttons_row.addStretch(1)
         run_layout.addLayout(buttons_row)
-        metrics_row = QtWidgets.QHBoxLayout()
-        self._label_elo = QtWidgets.QLabel("ELO — min: — mean: — max: —")
-        metrics_row.addWidget(self._label_elo)
-        metrics_row.addStretch(1)
-        run_layout.addLayout(metrics_row)
-        # One-line status: generation X of Y, elapsed, ETA (placeholder until wired)
+
+        # One-line status: generation X of Y, elapsed, ETA
         self._label_status = QtWidgets.QLabel("Status: —")
         run_layout.addWidget(self._label_status)
-        # Run log: user-defined path/name for auto-save, then Save / Load
-        run_layout.addWidget(QtWidgets.QLabel("Log to (auto-save each gen):"))
+
+        # Inline compute metrics (time used, ETA, avg/gen)
+        self._compute_block = ComputeBlockWidget()
+        run_layout.addWidget(self._compute_block)
+
+        layout.addWidget(run_group, 2)
+
+        # --- File box: log location + Save / Load + Load population ---
+        file_group = QtWidgets.QGroupBox("File")
+        file_layout = QtWidgets.QVBoxLayout(file_group)
+
+        # Header row: Load League Project + project name
+        header_row = QtWidgets.QHBoxLayout()
+        self._btn_load_population = QtWidgets.QPushButton("Load League Project")
+        self._btn_load_population.clicked.connect(self._on_load_population)
+        header_row.addWidget(self._btn_load_population)
+        self._label_project_name = QtWidgets.QLabel("No project loaded")
+        header_row.addWidget(self._label_project_name)
+        header_row.addStretch(1)
+        file_layout.addLayout(header_row)
+
+        file_layout.addWidget(QtWidgets.QLabel("Log file name (auto-saved per gen in project logs folder):"))
+
         log_path_row = QtWidgets.QHBoxLayout()
-        self._edit_log_dir = QtWidgets.QLineEdit()
-        self._edit_log_dir.setPlaceholderText("Directory")
-        self._edit_log_dir.setClearButtonEnabled(True)
         self._edit_log_filename = QtWidgets.QLineEdit()
-        self._edit_log_filename.setPlaceholderText("Filename (e.g. run.jsonl)")
+        self._edit_log_filename.setPlaceholderText("Log file name (e.g. league_run.jsonl)")
         self._edit_log_filename.setClearButtonEnabled(True)
-        self._btn_browse_log_dir = QtWidgets.QPushButton("Browse…")
+        self._btn_browse_log_dir = QtWidgets.QPushButton("Browse Logs")
         self._btn_browse_log_dir.clicked.connect(self._on_browse_log_dir)
-        log_path_row.addWidget(self._edit_log_dir)
         log_path_row.addWidget(self._edit_log_filename)
         log_path_row.addWidget(self._btn_browse_log_dir)
-        run_layout.addLayout(log_path_row)
-        self._edit_log_dir.textChanged.connect(self._on_log_path_changed)
+        file_layout.addLayout(log_path_row)
         self._edit_log_filename.textChanged.connect(self._on_log_path_changed)
+
         run_log_btn_row = QtWidgets.QHBoxLayout()
         self._btn_save_run_log = QtWidgets.QPushButton("Save run log")
         self._btn_load_run_log = QtWidgets.QPushButton("Load run log")
@@ -610,9 +629,12 @@ class RunSectionWidget(QtWidgets.QWidget):
         self._btn_load_run_log.clicked.connect(self._on_load_run_log)
         run_log_btn_row.addWidget(self._btn_save_run_log)
         run_log_btn_row.addWidget(self._btn_load_run_log)
+        run_log_btn_row.addWidget(self._btn_load_population)
         run_log_btn_row.addStretch(1)
-        run_layout.addLayout(run_log_btn_row)
-        layout.addWidget(run_group)
+        file_layout.addLayout(run_log_btn_row)
+
+        layout.addWidget(file_group, 3)
+
         self.update_run_log_buttons()
 
     def _on_start_clicked(self) -> None:
@@ -625,16 +647,102 @@ class RunSectionWidget(QtWidgets.QWidget):
         self.cancel_clicked.emit()
 
     def _on_browse_log_dir(self) -> None:
-        directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Choose log directory")
-        if directory:
-            self._edit_log_dir.setText(directory)
+        """Browse existing run logs across all projects (from the configured Projects folder)."""
+        if self._run_log_manager is None:
+            return
+        base = get_projects_folder()
+        if not base:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Projects folder not set",
+                "No Projects folder is configured.\n\n"
+                "Go to the Settings tab, set a Projects folder, then try again.",
+            )
+            return
+        base_path = Path(base)
+        if not base_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Projects folder unavailable",
+                "The Projects folder does not exist:\n"
+                f"{base}\n\n"
+                "Please go to the Settings tab, choose a valid Projects folder,\n"
+                "and try again.",
+            )
+            return
+
+        # Build list of logs: all *.jsonl under each project's logs/ subfolder.
+        logs: list[tuple[str, Path]] = []
+        for proj_name in _list_existing_projects(base_path):
+            proj_dir = base_path / proj_name
+            logs_dir = proj_dir / "logs"
+            if not logs_dir.is_dir():
+                continue
+            for log_path in logs_dir.glob("*.jsonl"):
+                logs.append((f"{proj_name} / {log_path.name}", log_path))
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Browse Logs")
+        dlg.setMinimumSize(480, 320)
+        vbox = QtWidgets.QVBoxLayout(dlg)
+        label = QtWidgets.QLabel(
+            "Select a run log to load into the Dashboard charts.\n"
+            "Logs are discovered under the Projects folder (project_name/logs/*.jsonl)."
+        )
+        label.setWordWrap(True)
+        vbox.addWidget(label)
+        list_widget = QtWidgets.QListWidget()
+        list_widget.setMinimumHeight(180)
+        vbox.addWidget(list_widget)
+        if not logs:
+            item = QtWidgets.QListWidgetItem(
+                "No logs found under the current Projects folder.\n"
+                "Run a league and ensure logs are written to each project's 'logs' directory."
+            )
+            item.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
+            list_widget.addItem(item)
+        else:
+            for display, path in logs:
+                item = QtWidgets.QListWidgetItem(display)
+                item.setData(QtCore.Qt.ItemDataRole.UserRole, str(path))
+                list_widget.addItem(item)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_open = QtWidgets.QPushButton("Load selected")
+        btn_cancel = QtWidgets.QPushButton("Cancel")
+        btn_row.addWidget(btn_open)
+        btn_row.addWidget(btn_cancel)
+        vbox.addLayout(btn_row)
+
+        def on_selection_changed() -> None:
+            item = list_widget.currentItem()
+            btn_open.setEnabled(bool(item and item.flags() & QtCore.Qt.ItemFlag.ItemIsEnabled))
+
+        list_widget.itemSelectionChanged.connect(on_selection_changed)
+        on_selection_changed()
+
+        def on_open() -> None:
+            item = list_widget.currentItem()
+            if not item or not (item.flags() & QtCore.Qt.ItemFlag.ItemIsEnabled):
+                return
+            path_str = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if not path_str:
+                return
+            log_id = self._run_log_manager.load_from_path(path_str)
+            self.run_log_loaded.emit(log_id)
+            dlg.accept()
+
+        btn_open.clicked.connect(on_open)
+        btn_cancel.clicked.connect(dlg.reject)
+        list_widget.itemDoubleClicked.connect(lambda _item: on_open())
+        dlg.exec()
 
     def _on_log_path_changed(self) -> None:
         if self._run_log_manager is None:
             return
-        dir_text = self._edit_log_dir.text().strip() or None
         name_text = self._edit_log_filename.text().strip() or None
-        self._run_log_manager.set_auto_save(dir_text, name_text)
+        self._run_log_manager.set_auto_save(self._auto_save_dir, name_text)
 
     def _on_save_run_log(self) -> None:
         if self._run_log_manager is None or not self._run_log_manager.has_current_data():
@@ -654,6 +762,9 @@ class RunSectionWidget(QtWidgets.QWidget):
         if path:
             log_id = self._run_log_manager.load_from_path(path)
             self.run_log_loaded.emit(log_id)
+
+    def _on_load_population(self) -> None:
+        self.load_population_clicked.emit()
 
     def update_run_log_buttons(self) -> None:
         """Enable Save when there is current run log data; call after generation_done or clear."""
@@ -710,22 +821,41 @@ class RunSectionWidget(QtWidgets.QWidget):
         self.update_run_log_buttons()
 
     def update_metrics(self) -> None:
-        """Refresh ELO label from state."""
-        summary = self._state.last_summary
-        if summary:
-            mn = summary.get("elo_min", 0)
-            mean = summary.get("elo_mean", 0)
-            mx = summary.get("elo_max", 0)
-            self._label_elo.setText(f"ELO — min: {mn:.0f}  mean: {mean:.0f}  max: {mx:.0f}")
-        else:
-            pop = self._state.build_population()
-            elos = [a.elo_global for a in pop.agents.values()]
-            if elos:
-                mn, mx = min(elos), max(elos)
-                mean = sum(elos) / len(elos)
-                self._label_elo.setText(f"ELO — min: {mn:.0f}  mean: {mean:.0f}  max: {mx:.0f}")
-            else:
-                self._label_elo.setText("ELO — min: — mean: — max: —")
+        """ELO metrics now live in the Dashboard ELO block; nothing to do here."""
+        return
+
+    def configure_auto_save_for_project(self, project_path: Optional[str]) -> None:
+        """Set the auto-save directory based on the current League project path."""
+        if not project_path:
+            self._auto_save_dir = None
+            self._label_project_name.setText("No project loaded")
+            if self._run_log_manager is not None:
+                self._run_log_manager.set_auto_save(None, self._edit_log_filename.text().strip() or None)
+            return
+        logs_dir = Path(project_path) / "logs"
+        self._auto_save_dir = str(logs_dir)
+        self._label_project_name.setText(f"Project: {Path(project_path).name}")
+        if self._run_log_manager is not None:
+            filename = self._edit_log_filename.text().strip() or "league_run.jsonl"
+            self._run_log_manager.set_auto_save(self._auto_save_dir, filename)
+
+    def get_log_filename(self) -> str:
+        return self._edit_log_filename.text().strip()
+
+    def update_compute_metrics(
+        self,
+        elapsed_seconds: Optional[float],
+        eta_seconds: Optional[float],
+        avg_seconds_per_gen: Optional[float],
+    ) -> None:
+        self._compute_block.update_metrics(
+            elapsed_seconds,
+            eta_seconds,
+            avg_seconds_per_gen,
+        )
+
+    def clear_compute_metrics(self) -> None:
+        self._compute_block.clear_metrics()
 
 
 class LeagueTabWidget(QtWidgets.QWidget):
@@ -830,9 +960,10 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._btn_save.setToolTip("Save project (league config and UI state)")
         self._btn_save.clicked.connect(self._on_save_project)
         self._btn_save.setVisible(False)
-        # Row 1: project name (left, stretch) + warning (when dirty) + Save + File (when project loaded)
+        # Row 1: project name / "No Project Loaded" label + warning (when dirty) + Save + File (when project loaded)
         proj_row1 = QtWidgets.QHBoxLayout()
-        self._label_project.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        # Alignment is updated dynamically in _update_project_label() depending on whether
+        # a project is loaded (left-aligned) or not (centered).
         proj_row1.addWidget(self._label_project, 1)
         proj_row1.addWidget(self._btn_unsaved_warning, 0)
         proj_row1.addWidget(self._btn_save, 0)
@@ -2060,6 +2191,10 @@ class LeagueTabWidget(QtWidgets.QWidget):
             self._state.groups.append(new_group)
         self._refresh_table()
 
+    def load_population_from_file(self) -> None:
+        """Open a JSON population file and load it into the current population (same behavior as Import button)."""
+        self._on_import()
+
     def _get_checked_group_rows(self) -> List[int]:
         """Return row indices where the selection checkbox is checked."""
         indices: List[int] = []
@@ -2324,10 +2459,16 @@ class LeagueTabWidget(QtWidgets.QWidget):
             self._label_project.setStyleSheet(
                 "font-size: 14px; font-weight: bold; color: #e0e0e0; padding: 10px 8px;"
             )
+            self._label_project.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
         else:
             self._label_project.setText("No Project Loaded")
             self._label_project.setStyleSheet(
                 "font-size: 16px; font-weight: bold; color: #c0c0c0; padding: 12px 8px;"
+            )
+            self._label_project.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
             )
         self._update_content_visibility()
 
