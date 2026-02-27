@@ -19,7 +19,6 @@ from .dashboard_blocks import (
     ChartsAreaWidget,
     ELOBlockWidget,
     ExportBlockWidget,
-    GameMetricsBlockWidget,
     RLPerformanceBlockWidget,
 )
 from .league_tab import (
@@ -31,7 +30,7 @@ from .league_tab import (
     make_league_tab,
 )
 from .project_dialog import OpenProjectDialog
-from .run_log import RunLogManager
+from .run_log import RunLogManager, parse_run_log_entry, build_run_log_entry
 from tarot.league import LeagueRunControl
 from tarot.project import project_save
 from .themes import (
@@ -60,6 +59,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._league_worker: Optional[LeagueRunWorker] = None
         self._league_control: Optional[LeagueRunControl] = None
         self._run_log_manager = RunLogManager()
+        # High-resolution ELO / RL time series for the current run (one entry per match).
+        self._step_entries: list[dict] = []
 
         tabs = QtWidgets.QTabWidget()
 
@@ -75,6 +76,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._league_tab = league_tab
         # Configure auto-save location based on initial project, if any.
         self._run_section.configure_auto_save_for_project(league_state.project_path)
+        # If the project has an existing run log, show its ELO graph immediately.
+        self._load_project_run_log_into_dashboard(league_state.project_path)
         tabs.addTab(dashboard_tab, "Dashboard")
         tabs.addTab(league_tab, "League Parameters")
         tabs.addTab(self._make_agents_tab(), "Agents")
@@ -126,8 +129,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Increased a bit to give controls more vertical breathing room.
         # Order: Run (with File box), ELO/RL, Game, Export, Charts.
         DASH_RUN_BAR = 200  # Run controls + status + inline compute + File box
-        DASH_ELO = 260  # summary + time series chart
-        DASH_RL = 150
+        DASH_ELO = 400  # summary + time series chart (taller for readability)
+        DASH_RL = 225   # RL performance table (increased height)
         DASH_GAME = 110
         DASH_EXPORT = 90
         DASH_CHARTS = 400
@@ -154,20 +157,10 @@ class MainWindow(QtWidgets.QMainWindow):
         row_elo_rl.addWidget(self._rl_block, 1)
         layout.addLayout(row_elo_rl)
 
-        # 4. Game metrics block (scope: League | Generation | Last N)
-        self._game_metrics_block = GameMetricsBlockWidget()
-        self._game_metrics_block.setMinimumHeight(DASH_GAME)
-        layout.addWidget(self._game_metrics_block)
-
-        # 5. Export block (placeholder)
-        self._export_block = ExportBlockWidget()
-        self._export_block.setMinimumHeight(DASH_EXPORT)
-        layout.addWidget(self._export_block)
-
-        # 6. Charts area (ELO evolution, loaded logs checkboxes, banner, slider)
+        # 4. Charts area (ELO evolution, loaded logs checkboxes, banner, slider)
+        # Charts box removed from the Dashboard layout; keep an instance for
+        # internal wiring so code paths using _charts_area remain valid.
         self._charts_area = ChartsAreaWidget()
-        self._charts_area.setMinimumHeight(DASH_CHARTS)
-        layout.addWidget(self._charts_area)
 
         scroll = self._wrap_tab_in_scroll(inner)
         return scroll, run_section
@@ -190,10 +183,10 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         self._run_log_manager.clear_current()
+        self._step_entries = []
         self._run_section.update_run_log_buttons()
         self._elo_block.set_entries([])
         self._rl_block.set_entries([])
-        self._game_metrics_block.set_entries([])
         self._run_section.clear_compute_metrics()
         self._charts_area.set_current_entries([])
         self._run_start_time = time.time()
@@ -212,8 +205,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._league_worker = worker
         worker.generation_done.connect(self._on_league_generation_done)
+        worker.match_done.connect(self._on_league_match_done)
         worker.finished_run.connect(self._on_league_finished)
         self._run_section.set_buttons_running(True)
+        # Fix ELO chart X axis to the planned number of generations for this run.
+        self._elo_block.set_total_generations(num_generations)
+        self._charts_area.set_total_generations(num_generations)
         worker.start()
 
     def _on_league_generation_done(self, gen_idx: int, population: object, summary: object) -> None:
@@ -226,21 +223,11 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             pop = population
         summary_dict = summary if isinstance(summary, dict) else {}
+        # Lightweight updates only: keep heavy disk I/O and full table refresh
+        # out of the generation callback to keep the UI responsive.
         self._run_log_manager.append_generation(gen_idx, pop, summary_dict)
         self._league_tab.apply_population_from_run(pop, gen_idx, summary_dict)
         self._league_tab.add_to_hof_from_population(pop, gen_idx)
-        self._league_tab._refresh_table()
-        self._league_tab._update_project_label()
-        state = self._league_tab.state()
-        project_save(
-            state.project_path,
-            groups=self._league_tab._groups_tuples(),
-            league_config=self._league_tab.get_league_config(),
-            generation_index=state.generation_index,
-            last_summary=state.last_summary,
-            league_ui=self._league_tab.get_league_ui(),
-            hof_agents=state.hof_agents,
-        )
         self._run_section.update_metrics()
         self._run_section.update_run_log_buttons()
         # Update status line: Generation X of Y, Elapsed, ETA (only on generation done)
@@ -262,10 +249,10 @@ class MainWindow(QtWidgets.QMainWindow):
             eta_sec if gen_idx >= 1 else None,
             avg_time_per_gen,
         )
-        entries = self._run_log_manager.get_current_entries()
+        # For per-match resolution, prefer step entries if available.
+        entries = self._step_entries or self._run_log_manager.get_current_entries()
         self._elo_block.set_entries(entries)
         self._rl_block.set_entries(entries)
-        self._game_metrics_block.set_entries(entries)
         self._charts_area.set_current_entries(entries)
         self._charts_area.set_loaded_logs([
             (log.id, log.path, log.entries) for log in self._run_log_manager.get_loaded_logs()
@@ -276,6 +263,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._charts_area.set_loaded_logs([
             (log.id, log.path, log.entries) for log in self._run_log_manager.get_loaded_logs()
         ])
+        # Loaded logs use generation-level resolution.
+        self._step_entries = []
 
     def _on_load_population_clicked(self) -> None:
         """Handle 'Load League Project' from the Dashboard File box."""
@@ -310,6 +299,81 @@ class MainWindow(QtWidgets.QMainWindow):
             state = self._league_tab.state()
             self._run_section.update_start_enabled()
             self._run_section.configure_auto_save_for_project(state.project_path)
+            # If the loaded project has an existing run log, reflect it in the dashboard.
+            self._load_project_run_log_into_dashboard(state.project_path)
+
+    def _on_league_match_done(
+        self,
+        gen_idx: int,
+        round_idx: int,
+        population: object,
+        round_summary: object,
+    ) -> None:
+        """
+        Per-match callback from LeagueRunWorker.
+
+        Build a transient run-log-style entry capturing the current Population snapshot
+        and ELO summary after this match, append it to the in-memory step series,
+        and update the Dashboard ELO / RL / Game metrics blocks and chart.
+        """
+        from tarot.tournament import Population as TarotPopulation
+
+        if not isinstance(population, TarotPopulation):
+            pop = TarotPopulation()
+            if hasattr(population, "agents"):
+                for a in population.agents.values():
+                    pop.add(a)
+        else:
+            pop = population
+
+        summary_dict = round_summary if isinstance(round_summary, dict) else {}
+        entry = build_run_log_entry(gen_idx, pop, summary_dict)
+        self._step_entries.append(entry)
+        entries = self._step_entries
+        self._elo_block.set_entries(entries)
+        self._rl_block.set_entries(entries)
+        self._charts_area.set_current_entries(entries)
+
+    def _load_project_run_log_into_dashboard(self, project_path: Optional[str]) -> None:
+        """
+        When a project is loaded, try to load its auto-saved run log (if any)
+        and immediately reflect it in the Dashboard ELO/RL/Game metrics blocks
+        and Charts area.
+        """
+        if not project_path:
+            return
+        logs_dir = Path(project_path) / "logs"
+        if not logs_dir.exists():
+            return
+        # Use the same default as League tab auto-save if no custom name is set.
+        log_filename = ""
+        if hasattr(self, "_run_section"):
+            try:
+                log_filename = self._run_section.get_log_filename().strip()
+            except Exception:
+                log_filename = ""
+        if not log_filename:
+            log_filename = "league_run.jsonl"
+        log_path = logs_dir / log_filename
+        if not log_path.exists():
+            return
+        entries = []
+        try:
+            with log_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entries.append(parse_run_log_entry(line))
+        except Exception:
+            return
+        if not entries:
+            return
+        # When loading from disk we have generation-level entries only.
+        self._step_entries = list(entries)
+        self._elo_block.set_entries(entries)
+        self._rl_block.set_entries(entries)
+        self._charts_area.set_current_entries(entries)
 
     def _on_league_finished(self, cancelled: bool, paused: bool) -> None:
         self._run_section.set_buttons_running(False)
@@ -317,6 +381,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self._run_section.clear_compute_metrics()
         self._league_worker = None
         self._league_control = None
+        # Persist final state and refresh League tab visuals once at the end,
+        # instead of on every generation, to avoid UI stalls during the run.
+        state = self._league_tab.state()
+        if state.project_path:
+            try:
+                project_save(
+                    state.project_path,
+                    groups=self._league_tab._groups_tuples(),
+                    league_config=self._league_tab.get_league_config(),
+                    generation_index=state.generation_index,
+                    last_summary=state.last_summary,
+                    league_ui=self._league_tab.get_league_ui(),
+                    hof_agents=state.hof_agents,
+                )
+                self._league_tab._update_project_label()
+                self._league_tab._refresh_table()
+            except Exception:
+                # Non-fatal: failures here should not crash the UI.
+                pass
         if cancelled:
             QtWidgets.QMessageBox.information(self, "League run", "Run cancelled.")
         elif paused:

@@ -150,11 +150,18 @@ class RunLogManager:
         path = Path(file_path).resolve()
         entries: List[Dict[str, Any]] = []
         with path.open("r", encoding="utf-8") as f:
-            for line in f:
+            for line_no, line in enumerate(f, start=1):
                 line = line.strip()
                 if not line:
                     continue
-                entries.append(parse_run_log_entry(line))
+                try:
+                    entries.append(parse_run_log_entry(line))
+                except json.JSONDecodeError:
+                    # Skip malformed lines instead of crashing; user may have opened
+                    # a non-JSONL file or a file with mixed content.
+                    continue
+        if not entries:
+            raise ValueError(f"File does not contain any valid JSON log entries: {path}")
         log_id = f"{path.stem}_{uuid.uuid4().hex[:8]}"
         self._loaded.append(LoadedRunLog(id=log_id, path=str(path), entries=entries))
         return log_id

@@ -202,6 +202,45 @@ def test_checkbox_persists_after_refresh():
     assert cb_clone2.isChecked()
 
 
+def test_apply_population_preserves_clone_only_group():
+    """
+    After a league run, clone-only groups should keep their own row and not be
+    merged into the combined League group.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    # Anchor group: all agents clone_only.
+    anchor_agents = [
+        Agent(id="grp_anchor_0", name="AnchorA", player_counts=[4], clone_only=True),
+        Agent(id="grp_anchor_1", name="AnchorB", player_counts=[4], clone_only=True),
+    ]
+    anchor_group = Group(id="grp_anchor", name="Anchors", agents=anchor_agents)
+    # Regular GA group.
+    ga_agents = [
+        Agent(id="grp_ga_0", name="GA0", player_counts=[4], clone_only=False),
+        Agent(id="grp_ga_1", name="GA1", player_counts=[4], clone_only=False),
+    ]
+    ga_group = Group(id="grp_ga", name="GA", agents=ga_agents)
+
+    tab = LeagueTabWidget()
+    tab._state = LeagueTabState(groups=[anchor_group, ga_group])
+    pop = tab.state().build_population()
+    summary = {"elo_min": 0.0, "elo_mean": 0.0, "elo_max": 0.0, "num_agents": 4.0}
+
+    tab.apply_population_from_run(pop, 0, summary)
+
+    groups = tab.state().groups
+    assert len(groups) == 2
+    names = {g.name for g in groups}
+    assert "Anchors" in names
+    assert any(g.name.startswith("League (gen 0)") for g in groups)
+
+    anchors_after = next(g for g in groups if g.name == "Anchors")
+    league_after = next(g for g in groups if g.name != "Anchors")
+
+    assert all(a.clone_only for a in anchors_after.agents)
+    assert all(not a.clone_only for a in league_after.agents)
+
+
 def test_add_to_hof_from_population():
     """HOF when=Every generation, what=Best agent only: one agent added with unique id."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)

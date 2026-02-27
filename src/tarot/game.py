@@ -276,9 +276,13 @@ def play_one_deal_4p(
     rng: random.Random | None = None,
     get_poignee: Callable[[SingleDealState, int], tuple[int, int] | None] | None = None,
     get_chelem: Callable[[Deal4P, BiddingResult], int | None] | None = None,
-) -> tuple[tuple[int, int, int, int], Deal4P | None, BiddingResult | None]:
+) -> tuple[tuple[int, int, int, int], Deal4P | None, BiddingResult | None, DealOutcome]:
     """
-    Deal, bid, play one deal. If everyone passes or Petit sec, returns (0,0,0,0), deal, None.
+    Deal, bid, play one deal.
+
+    Returns (scores4, deal, bidding, outcome). If everyone passes or Petit sec,
+    bidding is None and outcome is the default (False, None, 0).
+
     Optional get_poignee and get_chelem for poignée and chelem announcements.
     """
     if rng is None:
@@ -288,7 +292,9 @@ def play_one_deal_4p(
     deal = Deal4P(hands=deal.hands, chien=deal.chien, dealer=dealer)
     for hand in deal.hands:
         if petit_sec_4p(hand):
-            return (0, 0, 0, 0), deal, None
+            # Early exit: Petit sec detected; treat as no-contract deal.
+            # Keep the return shape consistent with the normal path.
+            return (0, 0, 0, 0), deal, None, (False, None, 0)
     bidding = run_bidding_4p(deal.dealer, get_bid)
     if bidding is None:
         return (0, 0, 0, 0), deal, None, (False, None, 0)

@@ -31,7 +31,7 @@ A project to train reinforcement learning models to play Tarot (3, 4, and 5 play
 
 Phases 1–5 are implemented at the backend level; Phase 6 has a functional
 League tab (population management, project save/load, league and GA config)
-and a functional Dashboard tab (run controls, ELO/Compute/RL/Game metrics blocks, run log, charts area). Agents, Play, and Settings remain placeholders.
+and a functional Dashboard tab (Run/File/Export row with run controls and inline compute, a Statistics block (ELO/Fitness/Origin) with integrated game metrics, an RL performance table, and run log wiring). Agents, Play, and Settings remain placeholders.
 
 ---
 

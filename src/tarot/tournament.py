@@ -131,6 +131,11 @@ def update_elo_pairwise(
 
     for i, agent in enumerate(agents):
         delta = deltas[i]
+        # Respect fixed_elo flag: anchors still participate in matches and
+        # influence others' ratings via expectations, but their own ELO values
+        # are not updated.
+        if agent.fixed_elo:
+            continue
         if player_count == 3:
             agent.elo_3p += delta
         elif player_count == 4:
@@ -173,6 +178,32 @@ def make_elo_stratified_tables(
     for i in range(0, n, table_size):
         tables.append(ids[i : i + table_size])
     return tables
+
+
+def normalize_elo_to_target_mean(pop: Population, target_mean: float) -> None:
+    """
+    Shift ELO of all non-fixed_elo agents so that the population's average
+    ELO (across all agents) equals target_mean. Agents with fixed_elo are
+    unchanged. Updates elo_3p, elo_4p, elo_5p, and elo_global in-place.
+    """
+    if not pop.agents:
+        return
+    fixed = [a for a in pop.agents.values() if a.fixed_elo]
+    non_fixed = [a for a in pop.agents.values() if not a.fixed_elo]
+    if not non_fixed:
+        return
+    n_total = len(pop.agents)
+    sum_fixed = sum(a.elo_global for a in fixed)
+    sum_non_fixed = sum(a.elo_global for a in non_fixed)
+    n_non_fixed = len(non_fixed)
+    # We want (sum_fixed + sum_non_fixed_new) / n_total = target_mean
+    sum_non_fixed_new = target_mean * n_total - sum_fixed
+    shift = (sum_non_fixed_new - sum_non_fixed) / n_non_fixed
+    for agent in non_fixed:
+        agent.elo_3p += shift
+        agent.elo_4p += shift
+        agent.elo_5p += shift
+        agent.elo_global += shift
 
 
 def _random_bid_4p(rng: random.Random) -> int | None:
@@ -428,6 +459,7 @@ __all__ = [
     "update_elo_pairwise",
     "make_random_tables",
     "make_elo_stratified_tables",
+    "normalize_elo_to_target_mean",
     "run_random_match_3p",
     "run_random_match_4p",
     "run_random_match_5p",

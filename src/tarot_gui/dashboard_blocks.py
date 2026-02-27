@@ -34,13 +34,14 @@ class ComputeBlockWidget(QtWidgets.QGroupBox):
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__("Compute", parent)
-        layout = QtWidgets.QVBoxLayout(self)
+        layout = QtWidgets.QHBoxLayout(self)
         self._label_time_used = QtWidgets.QLabel("Time used: —")
         self._label_eta = QtWidgets.QLabel("Time left (ETA): —")
         self._label_avg = QtWidgets.QLabel("Avg time/gen: —")
         layout.addWidget(self._label_time_used)
         layout.addWidget(self._label_eta)
         layout.addWidget(self._label_avg)
+        layout.addStretch(1)
 
     def update_metrics(
         self,
@@ -85,19 +86,48 @@ def _elo_stats_from_entries(entries: List[Dict[str, Any]]) -> Optional[Dict[str,
 
 class ELOBlockWidget(QtWidgets.QGroupBox):
     """
-    ELO block: summary (min, mean, max, std) + time series chart (ELO over generations).
+    Statistics block: summary (min, mean, max, std) + optional game metrics
+    and a time series chart (ELO / Fitness / Origin) over generations.
     Data from RunLogManager current entries or selected loaded log.
     """
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
-        super().__init__("ELO", parent)
+        super().__init__("Statistics", parent)
         self._entries: List[Dict[str, Any]] = []
         layout = QtWidgets.QVBoxLayout(self)
+
+        # Top row: ELO summary on the left, game metrics on the right
+        top_row = QtWidgets.QHBoxLayout()
         self._summary_label = QtWidgets.QLabel("min: —  mean: —  max: —  std: —")
-        layout.addWidget(self._summary_label)
+        top_row.addWidget(self._summary_label)
+        top_row.addStretch(1)
+        self._game_metrics_label = QtWidgets.QLabel("Deals: —  Petit au bout: —  Grand schlem: —")
+        top_row.addWidget(self._game_metrics_label)
+        layout.addLayout(top_row)
+
+        # Mode selector row (above the chart)
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.addStretch(1)
+        mode_row.addWidget(QtWidgets.QLabel("View:"))
+        self._mode_combo = QtWidgets.QComboBox()
+        self._mode_combo.addItems(["ELO", "Fitness", "Origin"])
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self._mode_combo)
+        layout.addLayout(mode_row)
+
         self._chart = _ELOChartWidget(self)
-        self._chart.setMinimumHeight(180)
+        self._chart.setMinimumHeight(270)
         layout.addWidget(self._chart)
+
+    def set_total_generations(self, total: Optional[int]) -> None:
+        """
+        Fix the X axis [0, total-1] for the current run.
+        Pass None or <=0 to let the chart autoscale to data.
+        """
+        if total is None or total <= 0:
+            self._chart.set_generation_bounds(None, None)
+        else:
+            self._chart.set_generation_bounds(0, total - 1)
 
     def set_entries(self, entries: List[Dict[str, Any]]) -> None:
         """Set run log entries (e.g. from RunLogManager.get_current_entries()). Updates summary and chart."""
@@ -109,20 +139,58 @@ class ELOBlockWidget(QtWidgets.QGroupBox):
             self._summary_label.setText(
                 f"min: {stats['min']:.0f}  mean: {stats['mean']:.0f}  max: {stats['max']:.0f}  std: {stats['std']:.1f}"
             )
+        # Aggregate game metrics across the run (League scope)
+        if not self._entries:
+            self._game_metrics_label.setText("Deals: —  Petit au bout: —  Grand schlem: —")
+        else:
+            deals = sum(int(e.get("game_metrics", {}).get("deals", 0)) for e in self._entries)
+            petit = sum(int(e.get("game_metrics", {}).get("petit_au_bout", 0)) for e in self._entries)
+            grand = sum(int(e.get("game_metrics", {}).get("grand_slem", 0)) for e in self._entries)
+            self._game_metrics_label.setText(
+                f"Deals: {deals}  Petit au bout: {petit}  Grand schlem: {grand}"
+            )
         self._chart.set_entries(self._entries)
         self._chart.update()
 
+    def _on_mode_changed(self) -> None:
+        text = self._mode_combo.currentText() if hasattr(self, "_mode_combo") else "ELO"
+        mode = text.lower()
+        if mode not in ("elo", "fitness", "origin"):
+            mode = "elo"
+        self._chart.set_mode(mode)
+
 
 class _ELOChartWidget(QtWidgets.QWidget):
-    """Time series: elo_min, elo_mean, elo_max over generation_index (same style as League tab charts)."""
+    """Time series over generations for ELO / Fitness, or Origin placeholder."""
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._entries: List[Dict[str, Any]] = []
+        self._gen_min_override: Optional[int] = None
+        self._gen_max_override: Optional[int] = None
+        self._mode: str = "elo"  # "elo" | "fitness" | "origin"
         self.setMinimumWidth(260)
 
     def set_entries(self, entries: List[Dict[str, Any]]) -> None:
         self._entries = list(entries) if entries else []
+
+    def set_mode(self, mode: str) -> None:
+        mode = (mode or "").lower()
+        if mode not in ("elo", "fitness", "origin"):
+            mode = "elo"
+        if self._mode != mode:
+            self._mode = mode
+            self.update()
+
+    def set_generation_bounds(self, gen_min: Optional[int], gen_max: Optional[int]) -> None:
+        """
+        Optionally override the X-axis generation range.
+
+        If both are None, the chart auto-scales to the data range.
+        """
+        self._gen_min_override = gen_min
+        self._gen_max_override = gen_max
+        self.update()
 
     def paintEvent(self, event: QtCore.QEvent) -> None:
         super().paintEvent(event)
@@ -138,7 +206,8 @@ class _ELOChartWidget(QtWidgets.QWidget):
             gw = max(1, w - margin_left - margin_right)
             gh = max(1, h - margin_top - margin_bot)
 
-            if not self._entries:
+            # When no data and no explicit bounds, show a placeholder message.
+            if not self._entries and self._gen_max_override is None:
                 painter.setPen(QtGui.QPen(pen_color, 1))
                 painter.setFont(QtGui.QFont(self.font().family(), 9))
                 painter.drawText(
@@ -149,15 +218,71 @@ class _ELOChartWidget(QtWidgets.QWidget):
                 return
 
             gens = [e.get("generation_index", 0) for e in self._entries]
-            elo_mins = [e.get("elo_min", 0.0) for e in self._entries]
-            elo_means = [e.get("elo_mean", 0.0) for e in self._entries]
-            elo_maxs = [e.get("elo_max", 0.0) for e in self._entries]
-            gen_min, gen_max = min(gens), max(gens) if gens else 0
-            gen_range = (gen_max - gen_min) or 1
-            all_elos = elo_mins + elo_means + elo_maxs
-            elo_lo = min(all_elos) if all_elos else 0.0
-            elo_hi = max(all_elos) if all_elos else 1500.0
-            elo_range = (elo_hi - elo_lo) or 1.0
+
+            if self._mode == "elo":
+                series_min = [e.get("elo_min", 0.0) for e in self._entries]
+                series_mean = [e.get("elo_mean", 0.0) for e in self._entries]
+                series_max = [e.get("elo_max", 0.0) for e in self._entries]
+                y_label = "ELO"
+            elif self._mode == "fitness":
+                # Compute per-entry fitness min/mean/max from per-agent snapshots
+                series_min = []
+                series_mean = []
+                series_max = []
+                for e in self._entries:
+                    agents = e.get("agents", [])
+                    if not agents:
+                        # Fallback: mirror ELO when no per-agent data
+                        series_min.append(float(e.get("elo_min", 0.0)))
+                        series_mean.append(float(e.get("elo_mean", 0.0)))
+                        series_max.append(float(e.get("elo_max", 0.0)))
+                        continue
+                    vals: List[float] = []
+                    for a in agents:
+                        elo = max(0.0, float(a.get("elo_global", 0.0)))
+                        matches_played = int(a.get("matches_played", 0))
+                        total_score = float(a.get("total_match_score", 0.0))
+                        avg_score = (total_score / matches_played) if matches_played > 0 else 0.0
+                        vals.append(elo + avg_score)
+                    if not vals:
+                        vals = [0.0]
+                    series_min.append(min(vals))
+                    series_mean.append(sum(vals) / len(vals))
+                    series_max.append(max(vals))
+                y_label = "Fitness"
+            else:  # origin mode – placeholder chart
+                painter.setPen(QtGui.QPen(pen_color, 1))
+                painter.setFont(QtGui.QFont(self.font().family(), 9))
+                painter.drawText(
+                    int(gx), int(gy), int(gw), int(gh),
+                    QtCore.Qt.AlignmentFlag.AlignCenter,
+                    "Origin chart not yet available\n(run log lacks origin metadata).",
+                )
+                return
+
+            elo_mins = series_min
+            elo_means = series_mean
+            elo_maxs = series_max
+            steps = list(range(len(self._entries)))
+            if steps:
+                step_min, step_max = steps[0], steps[-1]
+            else:
+                step_min = step_max = 0
+            # Use explicit generation bounds only for drawing generation labels/boundaries,
+            # but the X coordinate is driven by match index (step index).
+            if gens:
+                data_gen_min, data_gen_max = min(gens), max(gens)
+            else:
+                data_gen_min = data_gen_max = 0
+            gen_min = self._gen_min_override if self._gen_min_override is not None else data_gen_min
+            gen_max = self._gen_max_override if self._gen_max_override is not None else data_gen_max
+            if gen_max < gen_min:
+                gen_max = gen_min
+            step_range = (step_max - step_min) or 1
+            all_vals = elo_mins + elo_means + elo_maxs
+            val_lo = min(all_vals) if all_vals else 0.0
+            val_hi = max(all_vals) if all_vals else 1500.0
+            val_range = (val_hi - val_lo) or 1.0
 
             # Axes
             painter.setPen(QtGui.QPen(pen_color, 1))
@@ -166,33 +291,33 @@ class _ELOChartWidget(QtWidgets.QWidget):
             font = painter.font()
             font.setPointSize(8)
             painter.setFont(font)
-            painter.drawText(int(gx + gw // 2 - 25), int(h - 4), "Generation")
+            painter.drawText(int(gx + gw // 2 - 25), int(h - 4), "Match")
             painter.save()
             painter.translate(8, gy + gh // 2 - 10)
             painter.rotate(-90)
-            painter.drawText(-20, 0, "ELO")
+            painter.drawText(-20, 0, y_label)
             painter.restore()
 
-            # X ticks
+            # X ticks: match indices (0 .. last)
             for i in range(5):
                 t = i / 4.0
-                g = gen_min + t * gen_range
+                s = step_min + t * step_range
                 fx = gx + t * (gw - 1)
                 painter.drawLine(int(fx), int(gy + gh), int(fx), int(gy + gh + 4))
-                painter.drawText(int(fx - 12), int(gy + gh + 12), f"{int(g)}")
+                painter.drawText(int(fx - 18), int(gy + gh + 12), f"{int(s)}")
             # Y ticks
             for i in range(5):
                 t = i / 4.0
-                elo = elo_lo + t * elo_range
+                val = val_lo + t * val_range
                 fy = gy + gh - t * (gh - 1)
                 painter.drawLine(int(gx - 4), int(fy), int(gx), int(fy))
-                painter.drawText(int(gx - 30), int(fy + 4), f"{int(elo)}")
+                painter.drawText(int(gx - 30), int(fy + 4), f"{int(val)}")
 
             def path_for(values: List[float]) -> QtGui.QPainterPath:
                 path = QtGui.QPainterPath()
                 for i, val in enumerate(values):
-                    t = (gens[i] - gen_min) / gen_range if gen_range else 0
-                    norm = (val - elo_lo) / elo_range if elo_range else 0
+                    t = (steps[i] - step_min) / step_range if step_range else 0
+                    norm = (val - val_lo) / val_range if val_range else 0
                     norm = max(0.0, min(1.0, norm))
                     px = gx + t * (gw - 1)
                     py = gy + gh - norm * (gh - 1)
@@ -212,6 +337,31 @@ class _ELOChartWidget(QtWidgets.QWidget):
                 painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
                 painter.drawPath(path)
 
+            # Vertical generation boundaries and labels
+            if len(gens) > 1:
+                prev_gen = gens[0]
+                boundary_steps: List[int] = []
+                for i in range(1, len(gens)):
+                    if gens[i] != prev_gen:
+                        boundary_steps.append(i)
+                        prev_gen = gens[i]
+                painter.setPen(QtGui.QPen(QtGui.QColor(120, 120, 120), 1, QtCore.Qt.PenStyle.DashLine))
+                for b in boundary_steps:
+                    t = (b - step_min) / step_range if step_range else 0
+                    fx = gx + t * (gw - 1)
+                    painter.drawLine(int(fx), int(gy), int(fx), int(gy + gh))
+                # Generation labels centered between boundaries
+                unique_gens = sorted(set(gens))
+                for g in unique_gens:
+                    idxs = [i for i, gv in enumerate(gens) if gv == g]
+                    if not idxs:
+                        continue
+                    center_step = (idxs[0] + idxs[-1]) / 2.0
+                    t = (center_step - step_min) / step_range if step_range else 0
+                    fx = gx + t * (gw - 1)
+                    painter.setPen(QtGui.QPen(pen_color, 1))
+                    painter.drawText(int(fx - 10), int(gy - 4), f"G{g}")
+
             # Legend
             leg_x = gx + gw + 4
             leg_y = gy
@@ -230,20 +380,33 @@ class _ELOChartWidget(QtWidgets.QWidget):
 
 
 def _delta_elo_from_entries(entries: List[Dict[str, Any]]) -> Dict[str, float]:
-    """Per-agent ELO delta (current gen vs previous gen). Keys = agent id."""
-    if len(entries) < 2:
+    """
+    Per-agent ELO delta: current elo_global minus the ELO when that agent was
+    first seen in the run. This gives a value for all agents (including those
+    born in later generations), not only those present in generation 0.
+    """
+    if not entries:
         return {}
-    prev_agents = {a.get("id"): float(a.get("elo_global", 0)) for a in entries[-2].get("agents", [])}
+    # First occurrence of each agent id → elo_global
+    first_elo: Dict[str, float] = {}
+    for entry in entries:
+        for a in entry.get("agents", []):
+            aid = a.get("id", "")
+            if aid not in first_elo:
+                first_elo[aid] = float(a.get("elo_global", 0))
     cur_agents = entries[-1].get("agents", [])
-    return {
-        a.get("id", ""): float(a.get("elo_global", 0)) - prev_agents.get(a.get("id"), 0)
-        for a in cur_agents
-    }
+    deltas: Dict[str, float] = {}
+    for a in cur_agents:
+        aid = a.get("id", "")
+        cur_elo = float(a.get("elo_global", 0))
+        base_elo = first_elo.get(aid, cur_elo)
+        deltas[aid] = cur_elo - base_elo
+    return deltas
 
 
 class RLPerformanceBlockWidget(QtWidgets.QGroupBox):
     """
-    Top-N table: name, ELO, Δ ELO, W/L deal, W/L match, avg score, generation.
+    Top-N table: name, ELO, Δ ELO, W/L deal, W/L match, avg score.
     N configurable (default 10). Data from run log entries (latest generation).
     """
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -251,19 +414,40 @@ class RLPerformanceBlockWidget(QtWidgets.QGroupBox):
         self._entries: List[Dict[str, Any]] = []
         layout = QtWidgets.QVBoxLayout(self)
         row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel("Top"))
+
+        # Sort [Top/Bottom] [N] by [column]
+        row.addWidget(QtWidgets.QLabel("Sort"))
+        self._combo_direction = QtWidgets.QComboBox()
+        self._combo_direction.addItems(["Top", "Bottom"])
+        self._combo_direction.currentIndexChanged.connect(self._refresh_table)
+        row.addWidget(self._combo_direction)
+
         self._spin_n = QtWidgets.QSpinBox()
         self._spin_n.setRange(1, 50)
         self._spin_n.setValue(10)
         self._spin_n.valueChanged.connect(self._refresh_table)
         row.addWidget(self._spin_n)
-        row.addWidget(QtWidgets.QLabel("agents"))
+
+        row.addWidget(QtWidgets.QLabel("by"))
+        self._combo_sort = QtWidgets.QComboBox()
+        self._combo_sort.addItems(["ELO", "ELO delta", "W/L deal", "W/L match", "Average Score"])
+        self._combo_sort.currentIndexChanged.connect(self._refresh_table)
+        row.addWidget(self._combo_sort)
+
         row.addStretch()
         layout.addLayout(row)
         self._table = QtWidgets.QTableWidget()
-        self._table.setColumnCount(7)
-        self._table.setHorizontalHeaderLabels(["Name", "ELO", "Δ", "W/L deal", "W/L match", "Avg", "Gen"])
-        self._table.horizontalHeader().setStretchLastSection(True)
+        # Columns: Name, ELO, Δ, W/L deal, W/L match, Average Score
+        self._table.setColumnCount(6)
+        self._table.setHorizontalHeaderLabels(
+            ["Name", "ELO", "Δ", "W/L deal", "W/L match", "Average Score"]
+        )
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Interactive)
+        # Make ELO and Δ columns narrower to free space for others
+        self._table.setColumnWidth(1, 70)  # ELO
+        self._table.setColumnWidth(2, 60)  # Δ
         layout.addWidget(self._table)
 
     def set_entries(self, entries: List[Dict[str, Any]]) -> None:
@@ -278,9 +462,32 @@ class RLPerformanceBlockWidget(QtWidgets.QGroupBox):
         agents = self._entries[-1].get("agents", [])
         if not agents:
             return
-        sorted_agents = sorted(agents, key=lambda a: float(a.get("elo_global", 0)), reverse=True)[:n]
         deltas = _delta_elo_from_entries(self._entries)
-        gen = self._entries[-1].get("generation_index", 0)
+
+        # Determine sort metric and direction (Top/Bottom)
+        sort_mode = self._combo_sort.currentText() if hasattr(self, "_combo_sort") else "ELO"
+
+        def sort_key(a: Dict[str, Any]) -> float:
+            aid = a.get("id", "")
+            elo = float(a.get("elo_global", 0))
+            deals_p, deals_w = int(a.get("deals_played", 0)), int(a.get("deals_won", 0))
+            match_p, match_w = int(a.get("matches_played", 0)), int(a.get("matches_won", 0))
+            total_s = float(a.get("total_match_score", 0))
+
+            if sort_mode == "ELO delta":
+                return float(deltas.get(aid, 0.0))
+            if sort_mode == "W/L deal":
+                return (deals_w / deals_p) if deals_p > 0 else -1.0
+            if sort_mode == "W/L match":
+                return (match_w / match_p) if match_p > 0 else -1.0
+            if sort_mode == "Average Score":
+                return (total_s / match_p) if match_p > 0 else -1.0
+            # Default: ELO
+            return elo
+
+        direction = self._combo_direction.currentText() if hasattr(self, "_combo_direction") else "Top"
+        reverse = direction != "Bottom"
+        sorted_agents = sorted(agents, key=sort_key, reverse=reverse)[:n]
         for a in sorted_agents:
             aid = a.get("id", "")
             deals_p, deals_w = int(a.get("deals_played", 0)), int(a.get("deals_won", 0))
@@ -290,16 +497,20 @@ class RLPerformanceBlockWidget(QtWidgets.QGroupBox):
             wl_m = f"{match_w}/{match_p}" if match_p else "—"
             avg = f"{total_s / match_p:.1f}" if match_p else "—"
             delta = deltas.get(aid, 0)
-            delta_str = f"+{delta:.0f}" if delta > 0 else (f"{delta:.0f}" if delta < 0 else "—")
+            delta_str = f"+{delta:.0f}" if delta > 0 else (f"{delta:.0f}" if delta < 0 else "0")
             row_idx = self._table.rowCount()
             self._table.insertRow(row_idx)
             self._table.setItem(row_idx, 0, QtWidgets.QTableWidgetItem(str(a.get("name", aid))))
             self._table.setItem(row_idx, 1, QtWidgets.QTableWidgetItem(f"{float(a.get('elo_global', 0)):.0f}"))
-            self._table.setItem(row_idx, 2, QtWidgets.QTableWidgetItem(delta_str))
+            delta_item = QtWidgets.QTableWidgetItem(delta_str)
+            if delta > 0:
+                delta_item.setForeground(QtGui.QBrush(QtGui.QColor(0, 160, 0)))
+            elif delta < 0:
+                delta_item.setForeground(QtGui.QBrush(QtGui.QColor(200, 0, 0)))
+            self._table.setItem(row_idx, 2, delta_item)
             self._table.setItem(row_idx, 3, QtWidgets.QTableWidgetItem(wl_d))
             self._table.setItem(row_idx, 4, QtWidgets.QTableWidgetItem(wl_m))
             self._table.setItem(row_idx, 5, QtWidgets.QTableWidgetItem(avg))
-            self._table.setItem(row_idx, 6, QtWidgets.QTableWidgetItem(str(gen)))
 
 
 # --- Game metrics block ---
@@ -393,9 +604,19 @@ class ChartsAreaWidget(QtWidgets.QGroupBox):
         slider_row.addWidget(self._gen_label)
         layout.addLayout(slider_row)
         self._chart = _ELOChartWidget(self)
-        self._chart.setMinimumHeight(220)
+        self._chart.setMinimumHeight(330)
         self._chart.setToolTip("ELO min/mean/max over generations. Hover for tooltips.")
         layout.addWidget(self._chart)
+
+    def set_total_generations(self, total: Optional[int]) -> None:
+        """
+        Fix the X axis [0, total-1] for the current run.
+        Pass None or <=0 to let the chart autoscale to data.
+        """
+        if total is None or total <= 0:
+            self._chart.set_generation_bounds(None, None)
+        else:
+            self._chart.set_generation_bounds(0, total - 1)
 
     def set_current_entries(self, entries: List[Dict[str, Any]]) -> None:
         self._current_entries = list(entries) if entries else []

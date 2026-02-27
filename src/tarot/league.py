@@ -21,7 +21,13 @@ from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 from .ga import GAConfig, compute_fitness, next_generation
 from .policies import policy_for_agent
-from .tournament import Agent, MatchmakingStyle, Population, run_round_with_policies
+from .tournament import (
+    Agent,
+    MatchmakingStyle,
+    Population,
+    normalize_elo_to_target_mean,
+    run_round_with_policies,
+)
 
 
 @dataclass
@@ -64,8 +70,16 @@ def _run_tournament_rounds(
     pop: Population,
     cfg: LeagueConfig,
     rng: random.Random,
+    *,
+    on_round: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Dict[str, int]:
-    """Run tournament rounds in-place; return game metrics (deals, petit_au_bout, grand_slem)."""
+    """
+    Run tournament rounds in-place; return game metrics (deals, petit_au_bout, grand_slem).
+
+    If on_round is provided, it is called after each round with:
+      - round_index (0-based within the generation)
+      - a summary dict including ELO stats and game metrics after that round.
+    """
     import torch
 
     def make_policy(agent: Agent):
@@ -74,7 +88,7 @@ def _run_tournament_rounds(
     total_deals = 0
     total_petit = 0
     total_grand_slem = 0
-    for _ in range(cfg.rounds_per_generation):
+    for round_idx in range(cfg.rounds_per_generation):
         metrics = run_round_with_policies(
             pop,
             player_count=cfg.player_count,
@@ -88,6 +102,19 @@ def _run_tournament_rounds(
         total_deals += metrics["deals"]
         total_petit += metrics["petit_au_bout"]
         total_grand_slem += metrics["grand_slem"]
+        if on_round is not None:
+            elos = [a.elo_global for a in pop.agents.values()]
+            if elos:
+                round_summary: Dict[str, float] = {
+                    "elo_min": min(elos),
+                    "elo_mean": sum(elos) / len(elos),
+                    "elo_max": max(elos),
+                    "num_agents": float(len(elos)),
+                    "deals": float(metrics.get("deals", 0)),
+                    "petit_au_bout": float(metrics.get("petit_au_bout", 0)),
+                    "grand_slem": float(metrics.get("grand_slem", 0)),
+                }
+                on_round(round_idx, round_summary)
     return {"deals": total_deals, "petit_au_bout": total_petit, "grand_slem": total_grand_slem}
 
 
@@ -156,6 +183,7 @@ def run_league_generation(
     rng: random.Random | None = None,
     *,
     checkpoint_base_dir: Optional[str] = None,
+    on_round: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Tuple[Population, Dict[str, float]]:
     """
     Run one league "generation" on the given population.
@@ -172,7 +200,7 @@ def run_league_generation(
     rng = rng or random.Random()
 
     # 1) Tournament rounds
-    game_metrics = _run_tournament_rounds(pop, cfg, rng)
+    game_metrics = _run_tournament_rounds(pop, cfg, rng, on_round=on_round)
 
     # 2) Optional PPO fine-tuning
     _ppo_finetune_top_agents(pop, cfg, rng, checkpoint_base_dir=checkpoint_base_dir)
@@ -195,6 +223,9 @@ def run_league_generation(
 
     fitness_fn = _fitness_fn_from_config(cfg)
     new_pop = next_generation(pop, cfg.ga_config, rng=rng, fitness_fn=fitness_fn)
+    # Normalize ELO so the new generation's average equals the previous generation's
+    # (shift only non-fixed_elo agents)
+    normalize_elo_to_target_mean(new_pop, summary["elo_mean"])
     return new_pop, summary
 
 
@@ -224,6 +255,7 @@ def run_league_generations(
     checkpoint_base_dir: Optional[str] = None,
     log_path: Optional[Path | str] = None,
     on_generation: Optional[Callable[[int, Dict[str, float]], None]] = None,
+    on_round: Optional[Callable[[int, int, Dict[str, float]], None]] = None,
 ) -> Iterator[Tuple[Population, Dict[str, float], int]]:
     """
     Run multiple league generations, yielding after each one.
@@ -253,8 +285,16 @@ def run_league_generations(
         if control and control.cancel_requested.is_set():
             return
 
+        def _on_round_inner(round_idx: int, round_summary: Dict[str, float]) -> None:
+            if on_round is not None:
+                on_round(gen_idx, round_idx, round_summary)
+
         new_pop, summary = run_league_generation(
-            current_pop, cfg, rng=rng, checkpoint_base_dir=checkpoint_base_dir
+            current_pop,
+            cfg,
+            rng=rng,
+            checkpoint_base_dir=checkpoint_base_dir,
+            on_round=_on_round_inner if on_round is not None else None,
         )
         yield new_pop, summary, gen_idx
         current_pop = new_pop

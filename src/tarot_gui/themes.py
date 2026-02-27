@@ -26,11 +26,21 @@ QGroupBox {
     background-color: #363636;
     border: 1px solid #505050;
     border-radius: 4px;
-    margin-top: 12px;
-    padding-top: 14px;
+    /* Small outer margin; reserve extra padding inside the top for the title */
+    margin-top: 6px;
+    padding-top: 22px;
     font-weight: bold;
 }
-QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px 2px 4px; background-color: transparent; font-size: 14px; }
+QGroupBox::title {
+    /* Place the title inside the box, top-left, instead of floating above */
+    subcontrol-origin: padding;
+    subcontrol-position: top left;
+    left: 10px;
+    top: 4px;
+    padding: 0 4px 2px 4px;
+    background-color: transparent;
+    font-size: 14px;
+}
 QPushButton {
     background-color: #404040;
     color: #e0e0e0;

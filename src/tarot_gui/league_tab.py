@@ -53,7 +53,7 @@ from tarot.project import get_checkpoint_base_dir, get_log_path
 from tarot.tournament import Agent, Population
 
 from .run_log import RunLogManager
-from .dashboard_blocks import ComputeBlockWidget
+from .dashboard_blocks import ComputeBlockWidget, ExportBlockWidget
 
 
 def _format_duration(seconds: float) -> str:
@@ -204,6 +204,29 @@ def _assign_group_agent_ids(agents: List[Agent], group_id: str) -> List[Agent]:
             total_match_score=a.total_match_score,
         ))
     return result
+
+
+def _agent_id_belongs_to_group(agent_id: str, group_id: str) -> bool:
+    """
+    Heuristic mapping from agent id back to its original group.
+
+    Agents created in the League tab are assigned ids with the pattern
+    "{group_id}_<index>". During GA evolution, new ids are derived from the
+    parent id by appending a suffix (for example "-c1" or "-clone0"), so the
+    original group_id remains as a prefix.
+
+    This helper treats any agent whose id starts with "{group_id}_" or
+    "{group_id}-" as belonging to that group.
+    """
+    if not agent_id or not group_id:
+        return False
+    if agent_id == group_id:
+        return True
+    if agent_id.startswith(f"{group_id}_"):
+        return True
+    if agent_id.startswith(f"{group_id}-"):
+        return True
+    return False
 
 
 @dataclass
@@ -470,6 +493,7 @@ class LeagueRunWorker(QtCore.QThread):
     """
 
     generation_done = QtCore.Signal(int, object, object)  # gen_idx, Population, summary dict
+    match_done = QtCore.Signal(int, int, object, object)  # gen_idx, round_idx, Population, per-round summary
     finished_run = QtCore.Signal(bool, bool)  # cancelled, paused
 
     def __init__(
@@ -501,6 +525,10 @@ class LeagueRunWorker(QtCore.QThread):
         cancelled = False
         paused = False
         try:
+            def _on_round(gen_idx: int, round_idx: int, round_summary: Dict[str, float]) -> None:
+                # Emit per-match updates so the GUI can update ELO / RL blocks at match resolution.
+                self.match_done.emit(gen_idx, round_idx, self._pop, round_summary)
+
             gen_iter = run_league_generations(
                 self._pop,
                 self._cfg,
@@ -509,8 +537,10 @@ class LeagueRunWorker(QtCore.QThread):
                 control=self._control,
                 checkpoint_base_dir=checkpoint_base_dir,
                 log_path=str(log_path),
+                on_round=_on_round,
             )
             for new_pop, summary, gen_idx in gen_iter:
+                self._pop = new_pop
                 self.generation_done.emit(gen_idx, new_pop, summary)
                 if self._control.cancel_requested.is_set():
                     cancelled = True
@@ -599,12 +629,12 @@ class RunSectionWidget(QtWidgets.QWidget):
         file_group = QtWidgets.QGroupBox("File")
         file_layout = QtWidgets.QVBoxLayout(file_group)
 
-        # Header row: Load League Project + project name
+        # Header row: Load League Project button + project status label
         header_row = QtWidgets.QHBoxLayout()
         self._btn_load_population = QtWidgets.QPushButton("Load League Project")
         self._btn_load_population.clicked.connect(self._on_load_population)
         header_row.addWidget(self._btn_load_population)
-        self._label_project_name = QtWidgets.QLabel("No project loaded")
+        self._label_project_name = QtWidgets.QLabel("No Project Loaded")
         header_row.addWidget(self._label_project_name)
         header_row.addStretch(1)
         file_layout.addLayout(header_row)
@@ -615,25 +645,25 @@ class RunSectionWidget(QtWidgets.QWidget):
         self._edit_log_filename = QtWidgets.QLineEdit()
         self._edit_log_filename.setPlaceholderText("Log file name (e.g. league_run.jsonl)")
         self._edit_log_filename.setClearButtonEnabled(True)
-        self._btn_browse_log_dir = QtWidgets.QPushButton("Browse Logs")
-        self._btn_browse_log_dir.clicked.connect(self._on_browse_log_dir)
         log_path_row.addWidget(self._edit_log_filename)
-        log_path_row.addWidget(self._btn_browse_log_dir)
         file_layout.addLayout(log_path_row)
         self._edit_log_filename.textChanged.connect(self._on_log_path_changed)
 
         run_log_btn_row = QtWidgets.QHBoxLayout()
         self._btn_save_run_log = QtWidgets.QPushButton("Save run log")
-        self._btn_load_run_log = QtWidgets.QPushButton("Load run log")
         self._btn_save_run_log.clicked.connect(self._on_save_run_log)
-        self._btn_load_run_log.clicked.connect(self._on_load_run_log)
         run_log_btn_row.addWidget(self._btn_save_run_log)
-        run_log_btn_row.addWidget(self._btn_load_run_log)
-        run_log_btn_row.addWidget(self._btn_load_population)
+        self._btn_browse_log_dir = QtWidgets.QPushButton("Browse Logs")
+        self._btn_browse_log_dir.clicked.connect(self._on_browse_log_dir)
+        run_log_btn_row.addWidget(self._btn_browse_log_dir)
         run_log_btn_row.addStretch(1)
         file_layout.addLayout(run_log_btn_row)
 
         layout.addWidget(file_group, 3)
+
+        # --- Export box: placeholder, aligned with Run and File on the right ---
+        self._export_group = ExportBlockWidget()
+        layout.addWidget(self._export_group, 1)
 
         self.update_run_log_buttons()
 
@@ -729,9 +759,14 @@ class RunSectionWidget(QtWidgets.QWidget):
             path_str = item.data(QtCore.Qt.ItemDataRole.UserRole)
             if not path_str:
                 return
-            log_id = self._run_log_manager.load_from_path(path_str)
-            self.run_log_loaded.emit(log_id)
-            dlg.accept()
+            try:
+                log_id = self._run_log_manager.load_from_path(path_str)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Load run log failed", str(e))
+                return
+            else:
+                self.run_log_loaded.emit(log_id)
+                dlg.accept()
 
         btn_open.clicked.connect(on_open)
         btn_cancel.clicked.connect(dlg.reject)
@@ -745,23 +780,25 @@ class RunSectionWidget(QtWidgets.QWidget):
         self._run_log_manager.set_auto_save(self._auto_save_dir, name_text)
 
     def _on_save_run_log(self) -> None:
+        """
+        Save the current run log to the project logs folder using the name
+        from the filename field above (auto-appending .jsonl if missing).
+        """
         if self._run_log_manager is None or not self._run_log_manager.has_current_data():
             return
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save run log", "", "JSONL (*.jsonl);;All files (*)"
-        )
-        if path:
-            self._run_log_manager.save_to_path(path)
-
-    def _on_load_run_log(self) -> None:
-        if self._run_log_manager is None:
+        if not self._auto_save_dir:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No project loaded",
+                "Cannot save run log because no League project is loaded.\n\n"
+                "Load a League project first so the logs folder is known.",
+            )
             return
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load run log", "", "JSONL (*.jsonl);;All files (*)"
-        )
-        if path:
-            log_id = self._run_log_manager.load_from_path(path)
-            self.run_log_loaded.emit(log_id)
+        name_text = self._edit_log_filename.text().strip() or "league_run.jsonl"
+        if not name_text.lower().endswith(".jsonl"):
+            name_text += ".jsonl"
+        path = Path(self._auto_save_dir) / name_text
+        self._run_log_manager.save_to_path(str(path))
 
     def _on_load_population(self) -> None:
         self.load_population_clicked.emit()
@@ -828,7 +865,7 @@ class RunSectionWidget(QtWidgets.QWidget):
         """Set the auto-save directory based on the current League project path."""
         if not project_path:
             self._auto_save_dir = None
-            self._label_project_name.setText("No project loaded")
+            self._label_project_name.setText("No Project Loaded")
             if self._run_log_manager is not None:
                 self._run_log_manager.set_auto_save(None, self._edit_log_filename.text().strip() or None)
             return
@@ -2304,8 +2341,67 @@ class LeagueTabWidget(QtWidgets.QWidget):
     def apply_population_from_run(
         self, pop: Population, generation_index: int, summary: Dict[str, float]
     ) -> None:
-        """Replace state with the result of a league run: one group from pop, update generation_index and last_summary."""
-        self._state.groups = [_population_to_single_group(pop, generation_index)]
+        """
+        Replace state with the result of a league run.
+
+        Default behaviour collapses the evolved Population into a single
+        "League (gen N)" group. However, groups marked clone-only are treated
+        as anchor populations: their agents keep their own group when possible
+        so that reference / Hall-of-Fame cohorts remain distinct.
+        """
+        previous_groups = list(self._state.groups)
+        clone_only_groups = [g for g in previous_groups if g.all_clone_only()]
+
+        if not clone_only_groups:
+            # No anchors: keep legacy behaviour (single combined group).
+            self._state.groups = [_population_to_single_group(pop, generation_index)]
+        else:
+            # Partition agents: those that can be mapped back to a clone-only
+            # group (by id prefix) stay in that group; the rest go to the main
+            # League group.
+            anchor_members: Dict[str, List[Agent]] = {g.id: [] for g in clone_only_groups}
+            other_agents: List[Agent] = []
+
+            for agent in pop.agents.values():
+                assigned = False
+                for g in clone_only_groups:
+                    if _agent_id_belongs_to_group(agent.id, g.id):
+                        anchor_members[g.id].append(agent)
+                        assigned = True
+                        break
+                if not assigned:
+                    other_agents.append(agent)
+
+            new_groups: List[Group] = []
+            # Preserve existing group order for anchors; keep original metadata.
+            for g in previous_groups:
+                members = anchor_members.get(g.id)
+                if members:
+                    new_groups.append(
+                        Group(
+                            id=g.id,
+                            name=g.name,
+                            agents=members,
+                            source_group_id=g.source_group_id,
+                            source_group_name=g.source_group_name,
+                            color=g.color,
+                        )
+                    )
+
+            # Remaining agents (if any) become the combined League group.
+            if other_agents:
+                other_pop = Population()
+                for a in other_agents:
+                    other_pop.add(a)
+                new_groups.append(_population_to_single_group(other_pop, generation_index))
+
+            # Fallback: if, for some reason, no agents were assignable (e.g. all
+            # clone-only groups disappeared), keep legacy behaviour.
+            if not new_groups:
+                self._state.groups = [_population_to_single_group(pop, generation_index)]
+            else:
+                self._state.groups = new_groups
+
         self._state.generation_index = generation_index
         self._state.last_summary = summary
 
