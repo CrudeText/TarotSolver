@@ -7,8 +7,10 @@ loading league populations.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, List
 
 from .tournament import Agent, Population
 
@@ -123,10 +125,62 @@ def population_from_json(s: str) -> Population:
     return population_from_dict(json.loads(s))
 
 
+def _safe_agent_filename(agent_id: str) -> str:
+    """Return a filesystem-safe filename for an agent (no path separators, no empty)."""
+    safe = re.sub(r"[^\w\-.]", "_", agent_id).strip("_") or "agent"
+    return f"{safe}.json"
+
+
+def save_agents_to_directory(agents: List[Agent], dir_path: Path) -> None:
+    """
+    Write each agent to a separate JSON file in dir_path.
+    Files are named using a safe version of agent.id (e.g. agent_0.json).
+    Creates the directory if it does not exist.
+    """
+    dir_path = Path(dir_path)
+    dir_path.mkdir(parents=True, exist_ok=True)
+    for agent in agents:
+        pop = Population()
+        pop.add(agent)
+        base = _safe_agent_filename(agent.id)
+        path = dir_path / base
+        n = 0
+        while path.exists() and n < 10000:
+            stem = path.stem + f"_{n}"
+            path = dir_path / (stem + path.suffix)
+            n += 1
+        with path.open("w", encoding="utf-8") as f:
+            f.write(population_to_json(pop))
+
+
+def load_population_from_directory(dir_path: Path) -> Population:
+    """
+    Load all JSON files in dir_path (that contain population/agents data)
+    and merge them into a single Population.
+    Skips non-JSON files and invalid JSON; agent ids must be unique across files.
+    """
+    dir_path = Path(dir_path)
+    if not dir_path.is_dir():
+        return Population()
+    pop = Population()
+    for path in sorted(dir_path.glob("*.json")):
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                d = json.load(f)
+            for agent_d in d.get("agents", []):
+                agent = _agent_from_dict(agent_d)
+                pop.add(agent)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+    return pop
+
+
 __all__ = [
     "population_to_dict",
     "population_from_dict",
     "population_to_json",
     "population_from_json",
+    "save_agents_to_directory",
+    "load_population_from_directory",
     "SCHEMA_VERSION",
 ]

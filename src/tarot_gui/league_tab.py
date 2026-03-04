@@ -47,7 +47,7 @@ class _ResizeFilter(QtCore.QObject):
         return super().eventFilter(obj, event)
 from tarot.ga import compute_fitness
 from tarot.league import LeagueConfig, LeagueRunControl, run_league_generations
-from tarot.persistence import population_from_dict, population_to_json
+from tarot.persistence import population_from_dict, population_to_json, load_population_from_directory
 from tarot.population_helpers import clone_agents, generate_random_agents, mutate_from_base
 from tarot.project import get_checkpoint_base_dir, get_log_path
 from tarot.tournament import Agent, Population
@@ -504,6 +504,7 @@ class LeagueRunWorker(QtCore.QThread):
         project_path: str,
         control: LeagueRunControl,
         rng_seed: Optional[int] = None,
+        device: Optional[str] = None,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -513,6 +514,7 @@ class LeagueRunWorker(QtCore.QThread):
         self._project_path = project_path
         self._control = control
         self._rng_seed = rng_seed
+        self._device = device
         self._pause_requested = False
 
     def request_pause(self) -> None:
@@ -536,6 +538,7 @@ class LeagueRunWorker(QtCore.QThread):
                 rng=rng,
                 control=self._control,
                 checkpoint_base_dir=checkpoint_base_dir,
+                device=self._device,
                 log_path=str(log_path),
                 on_round=_on_round,
             )
@@ -566,6 +569,7 @@ class LeagueRunWorker(QtCore.QThread):
             rng=rng,
             control=self._control,
             checkpoint_base_dir=checkpoint_base_dir,
+            device=self._device,
             log_path=str(log_path),
         )
         for new_pop, summary, gen_idx in gen_iter:
@@ -666,6 +670,22 @@ class RunSectionWidget(QtWidgets.QWidget):
         layout.addWidget(self._export_group, 1)
 
         self.update_run_log_buttons()
+
+    def set_run_output(
+        self,
+        project_path: Optional[str],
+        population: Optional[object],
+        generation_index: int,
+        fitness_config: Optional[object] = None,
+    ) -> None:
+        """Set the last run output for the Export block (called by MainWindow after each generation)."""
+        self._export_group.set_run_output(
+            project_path, population, generation_index, fitness_config
+        )
+
+    def clear_run_output(self) -> None:
+        """Clear run output in the Export block (e.g. when a new run starts)."""
+        self._export_group.clear_run_output()
 
     def _on_start_clicked(self) -> None:
         self.start_clicked.emit()
@@ -1097,9 +1117,18 @@ class LeagueTabWidget(QtWidgets.QWidget):
         btn_add_random = QtWidgets.QPushButton("Add random")
         btn_add_random.clicked.connect(self._on_add_random)
         tools_row.addWidget(btn_add_random)
-        btn_import = QtWidgets.QPushButton("Import")
-        btn_import.clicked.connect(self._on_import)
-        tools_row.addWidget(btn_import)
+        self._btn_import = QtWidgets.QPushButton("Import")
+        import_menu = QtWidgets.QMenu(self)
+        act_import_file = import_menu.addAction("From file...")
+        act_import_file.triggered.connect(self._on_import)
+        act_import_agents = import_menu.addAction("From agents folder")
+        act_import_agents.triggered.connect(self._on_import_from_agents_folder)
+        act_import_agents.setToolTip("Load all agents from this project's agents/ folder.")
+        act_import_hof = import_menu.addAction("From Hall of Fame")
+        act_import_hof.triggered.connect(self._on_import_from_hof)
+        act_import_hof.setToolTip("Load all agents from this project's agents/Hall of Fame/ folder.")
+        self._btn_import.setMenu(import_menu)
+        tools_row.addWidget(self._btn_import)
         btn_augment = QtWidgets.QPushButton("Augment from selection")
         btn_augment.clicked.connect(self._on_augment_from_selection)
         tools_row.addWidget(btn_augment)
@@ -2196,10 +2225,53 @@ class LeagueTabWidget(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Import failed", f"Could not load population: {e}")
             return
-        if not imported.agents:
-            QtWidgets.QMessageBox.information(self, "Import", "File contains no agents.")
-            return
+        self._apply_imported_population(imported, "file")
 
+    def _on_import_from_agents_folder(self) -> None:
+        """Import all agents from the project's agents/ folder."""
+        if not self._state.project_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Import",
+                "No project loaded. Open a project first, or use Import → From file... to load from a JSON file.",
+            )
+            return
+        dir_path = Path(self._state.project_path) / "agents"
+        if not dir_path.is_dir():
+            QtWidgets.QMessageBox.information(
+                self,
+                "Import from agents folder",
+                f"No agents folder found at:\n{dir_path}\n\nExport run output from the Dashboard to create it.",
+            )
+            return
+        imported = load_population_from_directory(dir_path)
+        self._apply_imported_population(imported, "agents folder")
+
+    def _on_import_from_hof(self) -> None:
+        """Import all agents from the project's agents/Hall of Fame/ folder."""
+        if not self._state.project_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Import",
+                "No project loaded. Open a project first, or use Import → From file... to load from a JSON file.",
+            )
+            return
+        dir_path = Path(self._state.project_path) / "agents" / "Hall of Fame"
+        if not dir_path.is_dir():
+            QtWidgets.QMessageBox.information(
+                self,
+                "Import from Hall of Fame",
+                f"No Hall of Fame folder found at:\n{dir_path}\n\nExport run output to Hall of Fame from the Dashboard to create it.",
+            )
+            return
+        imported = load_population_from_directory(dir_path)
+        self._apply_imported_population(imported, "Hall of Fame")
+
+    def _apply_imported_population(self, imported: Population, source_label: str) -> None:
+        """Show replace/merge dialog and add the imported population as a group."""
+        if not imported.agents:
+            QtWidgets.QMessageBox.information(self, "Import", f"{source_label} contains no agents.")
+            return
         msg = QtWidgets.QMessageBox(self)
         msg.setWindowTitle("Import")
         msg.setText("Replace current population or merge with existing?")
@@ -2209,19 +2281,17 @@ class LeagueTabWidget(QtWidgets.QWidget):
         msg.exec()
         if msg.clickedButton() == btn_cancel:
             return
-
         gid = _next_group_id("imp")
         agents_list = list(imported.agents.values())
         renamed = _assign_group_agent_ids(agents_list, gid)
         used_colors = {g.color for g in self._state.groups}
         new_group = Group(
             id=gid,
-            name=f"Imported ({len(renamed)})",
+            name=f"Imported from {source_label} ({len(renamed)})",
             agents=renamed,
-            source_group_name="Imported file",
+            source_group_name=source_label,
             color=_pick_group_color(used_colors, self._rng),
         )
-
         if msg.clickedButton() == btn_replace:
             self._state.groups = [new_group]
         else:

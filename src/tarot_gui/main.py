@@ -38,7 +38,9 @@ from .themes import (
     LIGHT,
     apply_theme,
     get_projects_folder,
+    get_saved_device,
     get_saved_theme,
+    save_device,
     save_projects_folder,
     save_theme,
 )
@@ -184,6 +186,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._run_log_manager.clear_current()
         self._step_entries = []
+        self._run_section.clear_run_output()
         self._run_section.update_run_log_buttons()
         self._elo_block.set_entries([])
         self._rl_block.set_entries([])
@@ -201,6 +204,7 @@ class MainWindow(QtWidgets.QMainWindow):
             project_path=state.project_path,
             control=control,
             rng_seed=None,
+            device=get_saved_device(),
             parent=self,
         )
         self._league_worker = worker
@@ -226,8 +230,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # Lightweight updates only: keep heavy disk I/O and full table refresh
         # out of the generation callback to keep the UI responsive.
         self._run_log_manager.append_generation(gen_idx, pop, summary_dict)
-        self._league_tab.apply_population_from_run(pop, gen_idx, summary_dict)
-        self._league_tab.add_to_hof_from_population(pop, gen_idx)
+        # Do not overwrite league parameters population; user exports from Dashboard Export block.
+        self._run_section.set_run_output(
+            self._league_tab.state().project_path,
+            pop,
+            gen_idx,
+            self._league_tab.get_league_config(),
+        )
         self._run_section.update_metrics()
         self._run_section.update_run_log_buttons()
         # Update status line: Generation X of Y, Elapsed, ETA (only on generation done)
@@ -479,11 +488,23 @@ class MainWindow(QtWidgets.QMainWindow):
         storage_layout.addRow("Projects folder:", projects_row)
         layout.addWidget(storage_group)
 
-        other_group = QtWidgets.QGroupBox("Other (placeholder)")
-        other_layout = QtWidgets.QFormLayout(other_group)
-        other_layout.addRow("Default device:", QtWidgets.QComboBox())
-        other_layout.addRow("Max parallel jobs:", QtWidgets.QSpinBox())
-        layout.addWidget(other_group)
+        from tarot.device import get_available_devices
+        compute_group = QtWidgets.QGroupBox("Compute")
+        compute_layout = QtWidgets.QFormLayout(compute_group)
+        self._combo_device = QtWidgets.QComboBox()
+        devices = get_available_devices()
+        saved_device = get_saved_device()
+        for i, (display_name, device_str) in enumerate(devices):
+            self._combo_device.addItem(display_name, device_str)
+            if device_str == saved_device:
+                self._combo_device.setCurrentIndex(i)
+        if self._combo_device.currentData() != saved_device:
+            self._combo_device.setCurrentIndex(0)  # fallback to CPU
+        self._combo_device.setToolTip("Device for league runs (policy inference and PPO fine-tuning). CUDA is used when available.")
+        self._combo_device.currentIndexChanged.connect(self._on_device_changed)
+        compute_layout.addRow("Default device:", self._combo_device)
+        compute_layout.addRow("Max parallel jobs:", QtWidgets.QSpinBox())
+        layout.addWidget(compute_group)
 
         layout.addStretch(1)
         return self._wrap_tab_in_scroll(inner)
@@ -502,6 +523,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if path:
             self._edit_projects_folder.setText(path)
             save_projects_folder(path)
+
+    def _on_device_changed(self) -> None:
+        if hasattr(self, "_combo_device") and self._combo_device.currentData():
+            save_device(self._combo_device.currentData())
 
 
 def main(argv: Optional[list[str]] = None) -> None:

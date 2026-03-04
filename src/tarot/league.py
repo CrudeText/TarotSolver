@@ -71,6 +71,7 @@ def _run_tournament_rounds(
     cfg: LeagueConfig,
     rng: random.Random,
     *,
+    device: Optional[str] = None,
     on_round: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Dict[str, int]:
     """
@@ -80,10 +81,12 @@ def _run_tournament_rounds(
       - round_index (0-based within the generation)
       - a summary dict including ELO stats and game metrics after that round.
     """
+    from .device import resolve_device
     import torch
+    dev = resolve_device(device)
 
     def make_policy(agent: Agent):
-        return policy_for_agent(agent, device=torch.device("cpu"))
+        return policy_for_agent(agent, device=dev)
 
     total_deals = 0
     total_petit = 0
@@ -124,6 +127,7 @@ def _ppo_finetune_top_agents(
     rng: random.Random,
     *,
     checkpoint_base_dir: Optional[str] = None,
+    device: Optional[str] = None,
 ) -> None:
     """
     Optional local PPO refinement for the top-K agents by fitness.
@@ -135,6 +139,7 @@ def _ppo_finetune_top_agents(
         return
 
     try:
+        from .device import resolve_device
         import torch
         from .env_game import TarotEnv4P
         from .training import PPOConfig, TarotPPOTrainer
@@ -143,6 +148,7 @@ def _ppo_finetune_top_agents(
         # Torch or training components not available; skip PPO.
         return
 
+    dev = resolve_device(device)
     fitness_fn = _fitness_fn_from_config(cfg)
     agents_sorted: List[Tuple[Agent, float]] = sorted(
         [(a, fitness_fn(a)) for a in pop.agents.values()],
@@ -153,8 +159,6 @@ def _ppo_finetune_top_agents(
     if not top_agents:
         return
 
-    device = torch.device("cpu")
-
     for idx, agent in enumerate(top_agents):
         # Build a small env for fine-tuning this agent.
         env_rng = random.Random(rng.random())
@@ -164,7 +168,7 @@ def _ppo_finetune_top_agents(
         from .training import TarotPPOTrainer
 
         ppo_cfg = PPOConfig()
-        trainer = TarotPPOTrainer(env, cfg=ppo_cfg, device=device)
+        trainer = TarotPPOTrainer(env, cfg=ppo_cfg, device=dev)
 
         # Run a few PPO updates; we don't care about stats here, only improvement.
         for _ in range(cfg.ppo_updates_per_agent):
@@ -183,6 +187,7 @@ def run_league_generation(
     rng: random.Random | None = None,
     *,
     checkpoint_base_dir: Optional[str] = None,
+    device: Optional[str] = None,
     on_round: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Tuple[Population, Dict[str, float]]:
     """
@@ -200,10 +205,16 @@ def run_league_generation(
     rng = rng or random.Random()
 
     # 1) Tournament rounds
-    game_metrics = _run_tournament_rounds(pop, cfg, rng, on_round=on_round)
+    game_metrics = _run_tournament_rounds(
+        pop, cfg, rng, device=device, on_round=on_round
+    )
 
     # 2) Optional PPO fine-tuning
-    _ppo_finetune_top_agents(pop, cfg, rng, checkpoint_base_dir=checkpoint_base_dir)
+    _ppo_finetune_top_agents(
+        pop, cfg, rng,
+        checkpoint_base_dir=checkpoint_base_dir,
+        device=device,
+    )
 
     # Compute simple summary metrics on the current population
     elos = [a.elo_global for a in pop.agents.values()]
@@ -253,6 +264,7 @@ def run_league_generations(
     control: LeagueRunControl | None = None,
     *,
     checkpoint_base_dir: Optional[str] = None,
+    device: Optional[str] = None,
     log_path: Optional[Path | str] = None,
     on_generation: Optional[Callable[[int, Dict[str, float]], None]] = None,
     on_round: Optional[Callable[[int, int, Dict[str, float]], None]] = None,
@@ -294,6 +306,7 @@ def run_league_generations(
             cfg,
             rng=rng,
             checkpoint_base_dir=checkpoint_base_dir,
+            device=device,
             on_round=_on_round_inner if on_round is not None else None,
         )
         yield new_pop, summary, gen_idx

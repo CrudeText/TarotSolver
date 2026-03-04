@@ -50,19 +50,37 @@ Tarot Solver is a Python project for **playing, simulating and training agents**
 
 From the project root:
 
-```bash
-python -m venv .venv
-.\.venv\Scripts\activate   # Windows
-python -m pip install -e ".[dev,rl,gui]"
-```
-
-**Quick start (GUI):**
+**Option A — Quick start with CUDA (recommended)**
 
 ```bash
 python run.py
 ```
 
-Creates `.venv` if needed, installs deps, and launches the PySide6 GUI. Skips install when the package is already present.
+Creates `.venv` if needed, installs **PyTorch with CUDA 12.8** (cu128) and the project, then launches the GUI. This makes `torch.cuda.is_available()` true so the Settings → Default device can use your GPU. **If you still see only CPU** (e.g. Python 3.14 had the CPU-only torch): run `python install_cuda_torch.py`, then `python run.py` again.
+
+**Option B — Manual install with CUDA**
+
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate   # Windows
+pip install -r requirements-cuda.txt
+```
+
+**Option C — CPU-only (no CUDA)**
+
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -e ".[dev,rl,gui]"
+```
+
+**Quick start (GUI) after install:**
+
+```bash
+python run.py
+```
+
+Or `python -m tarot_gui.main`. Skips install when the package is already present and runs the PySide6 GUI.
 
 ---
 

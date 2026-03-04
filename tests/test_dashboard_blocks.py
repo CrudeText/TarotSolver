@@ -130,13 +130,15 @@ def test_elo_block_chart_receives_entries():
 def test_delta_elo_from_entries():
     assert _delta_elo_from_entries([]) == {}
     entries_one = [{"generation_index": 0, "agents": [{"id": "a", "elo_global": 1500}]}]
-    assert _delta_elo_from_entries(entries_one) == {}
+    # Single entry: delta is 0 for the only agent (no change over time).
+    assert _delta_elo_from_entries(entries_one) == {"a": 0.0}
     entries_two = entries_one + [
         {"generation_index": 1, "agents": [{"id": "a", "elo_global": 1520}, {"id": "b", "elo_global": 1480}]}
     ]
     d = _delta_elo_from_entries(entries_two)
     assert d["a"] == 20.0
-    assert d["b"] == 1480.0
+    # b first appears in gen 1 with 1480, so delta for b is 0 (no change since first seen).
+    assert d["b"] == 0.0
 
 
 def test_rl_block_set_entries():
@@ -179,6 +181,10 @@ def test_game_metrics_block_scope():
 def test_export_block_placeholder():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     w = ExportBlockWidget()
-    child = w.findChild(QtWidgets.QLabel)
-    assert child is not None
-    assert "League Parameters" in child.toolTip()
+    w.clear_run_output()
+    # With no run output: placeholder text present, export buttons disabled.
+    assert "run output" in w._placeholder.text().lower()
+    assert not w._btn_export_agents.isEnabled()
+    assert not w._btn_export_hof.isEnabled()
+    # Form should be hidden when no output (placeholder state).
+    assert not w._form_widget.isVisible()

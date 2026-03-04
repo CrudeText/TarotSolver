@@ -1,10 +1,12 @@
 """Tests for population serialization."""
 
 from tarot.persistence import (
+    load_population_from_directory,
     population_from_dict,
     population_from_json,
     population_to_dict,
     population_to_json,
+    save_agents_to_directory,
 )
 from tarot.tournament import Agent, Population
 
@@ -83,3 +85,16 @@ def test_metadata_preserved():
     meta = {"league_config": {"player_count": 4}}
     d = population_to_dict(pop, metadata=meta)
     assert d["metadata"] == meta
+
+
+def test_save_and_load_from_directory(tmp_path):
+    pop = _make_population()
+    agents = list(pop.agents.values())
+    save_agents_to_directory(agents, tmp_path)
+    json_files = list(tmp_path.glob("*.json"))
+    assert len(json_files) == 2
+    restored = load_population_from_directory(tmp_path)
+    assert len(restored.agents) == 2
+    for aid in pop.agents:
+        assert restored.get(aid).id == pop.get(aid).id
+        assert restored.get(aid).name == pop.get(aid).name

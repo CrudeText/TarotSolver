@@ -225,7 +225,7 @@ The observation is **phase-dependent** (bidding vs play). All information below 
 - **Multi-agent / self-play:** extend the trainer so the same policy can control multiple seats, or multiple policies can be trained jointly, while preserving the current observation/action encodings.
 - **Personality conditioning (optional):** extend the network input with the personality trait vector so a single checkpoint can represent multiple “styles” (see §4.7). Traits remain descriptive by default.
 - **Tournament/ELO signal in training:** optionally add a **slow-timescale reward** term computed from tournament/ELO performance (Phase 5) to bias learning towards agents that do well in long-run leagues, not just isolated matches.
-- **Compute & deployment:** keep the implementation **CPU-first but GPU-aware**; the GUI will expose a simple “device” setting to select CPU vs GPU when launching training.
+- **Compute & deployment:** keep the implementation **CPU-first and GPU-aware**; Default device in Settings (CPU / CUDA when available) is wired for league runs and PPO.; the GUI will expose a simple “device” setting to select CPU vs GPU when launching training.
 
 ---
 
@@ -403,7 +403,7 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 | 3 | **ELO block** | ELO metrics only (observational): min/mean/max, spread, optional small chart. User stabilizes ELO themselves (e.g. fixed_ELO reference populations). |
 | 4 | **RL performance block** | Top-N agents (ELO, W/L, avg score, high risers), diversity/origin summary. Reference for W/L (e.g. random 4p ≈ 25%). Placed on the same row as the ELO block with equal width. |
 | 5 | **Game metrics block** | Deals, cards, petit au bout, grand schlem, etc. Scope filter: League (run) / Generation / (future: match). Updated frequently. |
-| 6 | **Export block** | Placeholder: "—" / N/A with tooltip "Configure in League Parameters" until League Parameters defines HOF/export. |
+|| 6 | **Export block** | **Run output export:** When a run has finished, the user can export the run output to the project’s **agents/** folder (whole population or a range ordered by ELO / average score / fitness) or to **agents/Hall of Fame/**. Agents are written as one JSON file per agent and are only removed if the user explicitly deletes them. Import in League Parameters can load from **agents/** or **agents/Hall of Fame/**. |
 | 7 | **Charts area** | ELO evolution, fitness, diversity (interactive; current run or loaded log). Same chart library as League tab. When logs loaded, checkbox to add each log to charts. |
 | — | **Run log** | Lives in the **File** box: Save run log, Load run log, plus logs chosen via Browse Logs. **Multiple logs** can be loaded for comparison. Banner "Viewing saved run: …" when viewing loaded data. |
 
@@ -438,11 +438,19 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 
 **Compute**
 
-- Time used, time left, **average time per generation**. CPU/GPU later.
+- Time used, time left, **average time per generation**. **Default device** is implemented in Settings → Compute (CPU / CUDA when available); league runs use it for policy inference and PPO fine-tuning.
 
 **Export and Hall of Fame**
 
-- Placeholder until League Parameters defines it: show "—" / N/A with tooltip "Configure in League Parameters".
+- **End of run — no auto-overwrite:** When a league run finishes (or after each generation), the **league parameters population is not overwritten**. The run output (final population) is kept only for the user to **export** from the Dashboard. The user explicitly chooses whether to export via the Export box in the Dashboard.
+- **Export box (Dashboard):** After a run (or when viewing the last run output), the user can export the run output:
+  - **Export to agents folder:** Export the **whole population** or a **range** (e.g. top N, or indices from–to), with **ordering** by ELO, average score, or fitness. Agents are written into the project’s **`agents/`** folder (one JSON file per agent). Files are **hard-written** and only removed if the user expressly deletes them.
+  - **Export to Hall of Fame:** Same options (whole or range, order by ELO / average score / fitness). Agents are written into **`agents/Hall of Fame/`**. These agents are also persistent until the user removes them.
+- **Import (League Parameters):** The existing **Import** button (above the population table) supports:
+  - **Import from file…** — pick a single population JSON file (unchanged).
+  - **Import from agents folder** — load all agents from the project’s `agents/` folder (all JSON files in that folder merged into one population; then replace or merge with current population).
+  - **Import from Hall of Fame** — load all agents from the project’s `agents/Hall of Fame/` folder.
+- **HOF during run:** Automatic “add to HOF” during the run (e.g. every N generations) is **not** used to write to the agents folder; the user exports to the Hall of Fame folder when they want. The in-memory HOF list in the League tab remains optional for UI display; persistent HOF is the contents of `agents/Hall of Fame/`.
 
 **Run log (save / load / browse)**
 
@@ -467,7 +475,8 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 - **No checkbox:** Export options are always visible in the Next Generation box (no toggle to grey them out).
 - **When to export:** Export when combo: On demand only; Every generation; Every N generations (when the latter is selected, "Every N gens" spinbox is enabled).
 - **What to export:** Full population; Top N by ELO; GA-eligible only (Export what combo).
-- **Export now** button exports the current population to a JSON file (e.g. for reimport via Import in Population management).
+- **Export now** button exports the **current league-parameters population** to a JSON file (e.g. for reimport via Import in Population management). It does **not** overwrite the population in the UI.
+- **End of run:** The **run output population is not applied** to the league parameters table. The user exports it from the **Dashboard Export block**: export whole or a range (ordered by ELO, average score, or fitness) to the project’s **agents/** folder or to **agents/Hall of Fame/**. Agents are written as one JSON per agent in those folders and can be imported later via **Import → from agents folder** or **from Hall of Fame** in the League Parameters tab.
 - Export when / every N / what are persisted in project league UI state.
 
 #### 8.1.6 League Parameters — backend wiring status
@@ -492,7 +501,7 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 
 **Done:** Run controls (Start/Pause/Cancel) connected; `LeagueRunWorker` (QThread) runs `run_league_generations()` off main thread; per-generation update (state, project save, log append, UI refresh); Start enabled only when project loaded.
 
-**TODOs:** Export during run: respect Export when/what in generation callback (no Export checkbox). Export now: full population from state; Export what combo can be used for future filtering. ELO/PPO checkbox state is persisted in league UI.
+**TODOs:** Export during run: respect Export when/what in generation callback (no Export checkbox). Export now: full population from state; Export what combo can be used for future filtering. ELO/PPO checkbox state is persisted in league UI. **Done:** Run output no longer overwrites league parameters; user exports from Dashboard to agents/ or agents/Hall of Fame/; Import can load from those folders.
 
 ### 8.2 Agents & Hall of Fame
 
@@ -526,7 +535,7 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 
 ### 8.4 Settings
 
-- **Compute:** default device, max concurrent PPO jobs.
+- **Compute:** Default device (CPU / CUDA when available), max concurrent PPO jobs (placeholder). Device selection is **wired**: league runs and PPO use the selected device.
 - **Storage:** checkpoint retention, replay logging level.
 - **Projects folder:** Base directory where all projects are stored (default: e.g. `D:/1 - Project Data/TarotSolver`). New projects are created as subdirectories here. Set in Settings tab.
 - **League defaults:** reusable presets for league configuration.
@@ -627,7 +636,7 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 | 4 | Observation | Start flat; observation built in a dedicated module for easy switch to structured later. |
 | 5 | Legal actions | Only legal moves (masking). |
 | 6 | Reward | End of match only; optional tournament bonus. |
-| 7 | Compute | GPU when available, else CPU; user can switch in GUI. |
+| 7 | Compute | **Default device:** CPU or CUDA (detected); user selects in Settings. League runs and PPO use the selected device. |
 | 8 | Storage | Results only by default; user can choose to save specific games (e.g. finals) in advance. |
 | 9 | GUI priority | Start simple (tournaments, results, training, metrics); spectate and play-vs-AI later. |
 | 10 | Action space | Separate bidding phase and playing phase (two distinct decision steps). |

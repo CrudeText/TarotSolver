@@ -1,12 +1,13 @@
+#!/usr/bin/env python3
 """
-Convenience launcher for the Tarot Solver GUI (with full backend deps).
+Bootstrap and run the Tarot Solver GUI with CUDA-enabled PyTorch.
 
-Behaviour:
-- If not already running inside a virtual environment, create ``.venv`` in the
-  project root (if it does not exist), then re-run this script inside it.
-- Inside the venv:
-  - If tarot_gui is importable: start the GUI directly (no pip install).
-  - Otherwise: install the package with pip install -e .[dev,rl,gui], then start the GUI.
+From the project root:
+  python run.py
+
+Creates a venv if missing, installs PyTorch (CUDA 12.8) then the project
+with [dev,rl,gui] extras, and launches the GUI. This ensures torch.cuda.is_available()
+after a plain "python run.py".
 """
 from __future__ import annotations
 
@@ -16,74 +17,94 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
-VENV_DIR = ROOT / ".venv"
-
-
-def in_virtualenv() -> bool:
-    """Return True if we're currently running inside any virtualenv."""
-    return sys.prefix != getattr(sys, "base_prefix", sys.prefix) or bool(
-        os.environ.get("VIRTUAL_ENV")
+def main() -> int:
+    root = Path(__file__).resolve().parent
+    venv_dir = root / ".venv"
+    py = sys.executable
+    in_venv = hasattr(sys, "real_prefix") or (
+        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
     )
 
+    # Ensure we run from project root
+    os.chdir(root)
 
-def venv_python_path() -> Path:
-    """Return the path to the python executable inside .venv."""
-    if os.name == "nt":
-        return VENV_DIR / "Scripts" / "python.exe"
-    return VENV_DIR / "bin" / "python"
+    if not in_venv and venv_dir.is_dir():
+        # Prefer running inside .venv if it exists
+        venv_py = venv_dir / "Scripts" / "python.exe" if os.name == "nt" else venv_dir / "bin" / "python"
+        if venv_py.is_file():
+            return subprocess.call([str(venv_py), str(root / "run.py")] + sys.argv[1:])
+
+    # 1) Create venv if missing
+    if not venv_dir.is_dir():
+        print("Creating .venv...")
+        subprocess.check_call([py, "-m", "venv", str(venv_dir)])
+        py = str(venv_dir / ("Scripts" if os.name == "nt" else "bin") / "python.exe")
+    else:
+        pass  # py stays sys.executable (may be venv or system)
+
+    # If we're in venv and CUDA + project are already installed, skip straight to launch
+    if in_venv or venv_dir.is_dir():
+        try:
+            r = subprocess.call(
+                [py, "-c", "import torch; import tarot_gui; exit(0 if torch.cuda.is_available() else 1)"],
+                cwd=root,
+                capture_output=True,
+            )
+            if r == 0:
+                return subprocess.call([py, "-m", "tarot_gui.main"] + sys.argv[1:])
+        except Exception:
+            pass
+
+    # 2) Install project and its deps first (except torch), then install PyTorch with CUDA last
+    # so nothing overwrites the CUDA build. Python 3.14: use cu128 (no cu121 wheels).
+    print("Installing Tarot Solver [dev,rl,gui]...")
+    subprocess.check_call([
+        py, "-m", "pip", "install", "-e", ".[dev,rl,gui]",
+        "--no-deps", "-q",
+    ])
+    subprocess.check_call([
+        py, "-m", "pip", "install", "numpy>=1.23", "PySide6>=6.6", "pytest>=7.0", "ruff>=0.1.0",
+        "-q",
+    ])
+    cuda_index = "https://download.pytorch.org/whl/cu128"
+    print("Installing PyTorch with CUDA 12.8...")
+    subprocess.check_call([
+        py, "-m", "pip", "install", "torch",
+        "--index-url", cuda_index,
+        "-q",
+    ])
+
+    # Verify CUDA is visible
+    if _check_cuda(py, root):
+        try:
+            out = subprocess.run(
+                [py, "-c", "import torch; print(torch.cuda.get_device_name(0))"],
+                cwd=root, capture_output=True, text=True, timeout=10
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                print("CUDA GPU detected:", out.stdout.strip())
+        except Exception:
+            pass
+    else:
+        print("Warning: torch.cuda.is_available() is False. You may have the CPU-only build; try: pip uninstall torch && python run.py")
+
+    # 4) Launch GUI
+    return subprocess.call([py, "-m", "tarot_gui.main"] + sys.argv[1:])
 
 
-def package_installed() -> bool:
-    """Return True if tarot_gui (and thus the full package) is importable."""
+def _check_cuda(py: str, root: Path) -> bool:
+    """Return True if torch sees a CUDA GPU."""
     try:
-        import tarot_gui  # noqa: F401
-        return True
-    except ImportError:
+        r = subprocess.run(
+            [py, "-c", "import torch; exit(0 if torch.cuda.is_available() else 1)"],
+            cwd=root,
+            capture_output=True,
+            timeout=30,
+        )
+        return r.returncode == 0
+    except Exception:
         return False
 
 
-def ensure_venv_and_rerun() -> None:
-    """Create .venv if needed and re-run this script inside it."""
-    if not VENV_DIR.exists():
-        print(f"Creating virtual environment at {VENV_DIR} ...")
-        subprocess.check_call(
-            [sys.executable, "-m", "venv", str(VENV_DIR)],
-            cwd=str(ROOT),
-        )
-
-    py = venv_python_path()
-    print(f"Re-running inside virtualenv using {py} ...")
-    cmd = [str(py), str(ROOT / "run.py"), "--inside-venv"]
-    subprocess.check_call(cmd, cwd=str(ROOT))
-
-
-def inside_venv_main() -> None:
-    """Install dependencies if needed, then run the GUI."""
-    if not package_installed():
-        print("Installing tarot-solver with dev, RL, and GUI extras into virtualenv ...")
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "-e", ".[dev,rl,gui]"],
-            cwd=str(ROOT),
-        )
-
-    subprocess.check_call(
-        [sys.executable, "-m", "tarot_gui.main"],
-        cwd=str(ROOT),
-    )
-
-
-def main() -> None:
-    if "--inside-venv" in sys.argv:
-        inside_venv_main()
-        return
-
-    if in_virtualenv():
-        inside_venv_main()
-    else:
-        ensure_venv_and_rerun()
-
-
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())

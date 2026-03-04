@@ -11,6 +11,7 @@ SETTINGS_ORG = "TarotSolver"
 SETTINGS_APP = "TarotSolver"
 THEME_KEY = "theme"
 PROJECTS_FOLDER_KEY = "projects_folder"
+DEVICE_KEY = "default_device"
 
 # Default projects folder (parent of typical project dir)
 _DEFAULT_PROJECTS_FOLDER = "D:/1 - Project Data/TarotSolver"
@@ -114,6 +115,26 @@ def get_projects_folder() -> str:
 def save_projects_folder(path: str) -> None:
     settings = QtCore.QSettings(SETTINGS_ORG, SETTINGS_APP)
     settings.setValue(PROJECTS_FOLDER_KEY, path)
+
+
+def get_saved_device() -> str:
+    """Return saved default device string (e.g. 'cpu', 'cuda'). Uses 'cuda' if available and not set."""
+    settings = QtCore.QSettings(SETTINGS_ORG, SETTINGS_APP)
+    value = settings.value(DEVICE_KEY, None, type=str)
+    if value:
+        return value
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def save_device(device_str: str) -> None:
+    settings = QtCore.QSettings(SETTINGS_ORG, SETTINGS_APP)
+    settings.setValue(DEVICE_KEY, device_str or "cpu")
 
 
 def apply_theme(app: QtWidgets.QApplication, theme: str) -> None:

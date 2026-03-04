@@ -1,0 +1,8 @@
+# Install with CUDA-enabled PyTorch so that torch.cuda.is_available() after install.
+# For Python 3.14 use cu128 (cu121 has no cp314 wheels). For 3.10–3.12, cu121 or cu128 both work.
+# Use: pip install -r requirements-cuda.txt
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch>=2.0.0
+numpy>=1.23
+PySide6>=6.6
+-e ".[dev]"

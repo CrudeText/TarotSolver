@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
+# For CUDA: use requirements-cuda.txt or "python run.py" (installs torch from PyTorch cu121 index).
 dev = ["pytest>=7.0", "ruff>=0.1.0"]
 rl = ["torch>=2.0.0", "numpy>=1.23"]
 gui = ["PySide6>=6.6"]
