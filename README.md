@@ -110,7 +110,7 @@ See the API for `play_one_deal_4p`, `run_match_4p`, `run_league_generation`, etc
 ### GUI
 
 - **League** — Build populations as groups (Add random, Import, Augment, Clear), expand groups to edit agents, configure league structure and GA. Export now saves full population.
-- **Dashboard** — Run controls (Start, Pause at next generation, Cancel); ELO min/mean/max; project required to start. Charts and ranking table planned.
+- **Dashboard** — Run controls (Start, Pause at next generation, Cancel); live ELO min/mean/max chart and generation stats; early version of the ranking table for agents by ELO / average score / fitness. Still under active development.
 - **Agents, Play, Settings** — Placeholders for later phases.
 
 #### League tab (screenshots)
@@ -122,6 +122,12 @@ Population & Agent Generator (top of the League Parameters tab): the **Project +
 League configuration & GA/RL parameters (bottom of the League Parameters tab): the **Tournament**, **Next Generation**, **Fitness** and **Reproduction** boxes where you configure player count and matchmaking, deals and matches per generation, optional PPO fine‑tuning, fitness weights (ELO vs average score), GA reproduction counts (sexual/mutated/cloned, with gearbox options), mutation settings, number of generations, and export policy for saving populations over time.
 
 ![League Parameters tab — league configuration](images/League%20Parameters%20Example.png)
+
+#### Dashboard tab (screenshot, WIP)
+
+The Dashboard tab is the main run cockpit: you select the project and league parameters, start or pause/cancel a run, and watch live ELO curves and the per‑generation ranking table update as matches complete. The layout and available metrics are still evolving, but the core controls and charts are already usable.
+
+![Dashboard tab — example](images/Dashboard%20Example.png)
 
 ---
 
