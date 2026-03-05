@@ -18,10 +18,10 @@ from .tournament import Agent, AgentId, Population
 @dataclass
 class GAConfig:
     population_size: int
-    # Legacy (used when sexual_offspring_count is None): elite fraction and clone fraction of remaining
+    # Legacy (used only when loading old configs; ignored by next_generation logic)
     elite_fraction: float = 0.1
     elite_clone_fraction: float = 0.0
-    # Count-based (when set): sexual_offspring + mutate + clone = slots_for_evolved
+    # Count-based: sexual_offspring + mutate + clone MUST equal GA slots (population_size - non-GA agents)
     sexual_offspring_count: int | None = None
     mutate_count: int | None = None
     clone_count: int | None = None
@@ -249,11 +249,23 @@ def next_generation(
     """
     Build the next generation from the current population.
 
-    When cfg has sexual_offspring_count, mutate_count, clone_count set (count-based mode):
-      - Rank eligible agents by fitness (desc). Worst x = sexual_offspring_count are eliminated.
-      - Elite pool = top (slots - x) agents. Fill: clone_count clones, mutate_count mutants,
-        sexual_offspring_count sexual offspring (two parents from elite, combined by gearbox setting).
-    Otherwise (legacy): elite_fraction + elite_clone_fraction as before.
+    Deterministic banded selection over GA parents (count-based only):
+      - Reference agents (can_use_as_ga_parent == False) are copied as-is into the next
+        population and never counted in GA slots.
+      - GA parents are sorted by fitness (desc). Let:
+            n = cfg.clone_count
+            m = cfg.mutate_count
+            u = cfg.sexual_offspring_count
+        and slots_for_evolved = cfg.population_size - len(reference_agents).
+      - The following hard constraints are enforced (no clamping):
+            n + m + u == slots_for_evolved
+            slots_for_evolved <= number of GA parents
+      - Clone band: top n GA parents are copied unchanged into the next population.
+      - Mutate band: next m GA parents are replaced by mutated children
+        (one child per parent via mutate_agent).
+      - Sexual band: bottom u GA parents are deleted; their slots are filled by u
+        sexual offspring whose parents are sampled from the elite parent pool =
+        top (n + m) GA parents, using GAConfig gearbox settings.
 
     NOTE: ELOs and match stats must already be updated (e.g. by tournaments) before calling.
     """
@@ -268,139 +280,47 @@ def next_generation(
     if slots_for_evolved == 0:
         return new_pop
 
+    # GA parents only (used for selection and reproduction)
     scored = _sorted_agents_by_fitness(pop, fitness_fn, ga_parents_only=True)
+    ga_parents = [a for a, _ in scored]
+    if not ga_parents and slots_for_evolved > 0:
+        raise ValueError("GAConfig requires GA parents but none are available (can_use_as_ga_parent == False for all agents).")
 
-    use_counts = (
-        cfg.sexual_offspring_count is not None
-        and cfg.mutate_count is not None
-        and cfg.clone_count is not None
-    )
-    if use_counts:
-        sexual_n = max(0, min(slots_for_evolved, cfg.sexual_offspring_count or 0))
-        clone_n = max(0, min(slots_for_evolved, cfg.clone_count or 0))
-        mutate_n = max(0, min(slots_for_evolved, cfg.mutate_count or 0))
-        # Allow sum <= slots (bar not full); if over, clamp mutate to fit
-        if sexual_n + clone_n + mutate_n > slots_for_evolved:
-            mutate_n = max(0, slots_for_evolved - sexual_n - clone_n)
-        elite_pool_size = clone_n + mutate_n  # survivors (non-eliminated)
-        if elite_pool_size <= 0:
-            return new_pop
-        scored_elite = scored[:elite_pool_size]
-        # Clones from elite pool
-        clone_counter = 0
-        for _ in range(clone_n):
-            parent = rng.choice([a for a, _ in scored_elite])
-            new_id = f"{parent.id}-clone{clone_counter}"
-            while new_id in pop.agents or new_id in new_pop.agents:
-                clone_counter += 1
-                new_id = f"{parent.id}-clone{clone_counter}"
-            clone_counter += 1
-            clone = Agent(
-                id=new_id,
-                name=parent.name,
-                player_counts=list(parent.player_counts),
-                elo_3p=parent.elo_3p,
-                elo_4p=parent.elo_4p,
-                elo_5p=parent.elo_5p,
-                elo_global=parent.elo_global,
-                generation=parent.generation,
-                traits=dict(parent.traits),
-                checkpoint_path=parent.checkpoint_path,
-                arch_name=parent.arch_name,
-                parents=list(parent.parents),
-                can_use_as_ga_parent=parent.can_use_as_ga_parent,
-                fixed_elo=parent.fixed_elo,
-                clone_only=parent.clone_only,
-                play_in_league=parent.play_in_league,
-                matches_played=0,
-                total_match_score=0.0,
-            )
-            new_pop.add(clone)
-        # Mutants: parents from elite pool (roulette by default)
-        mut_parents = _roulette_select(scored_elite, mutate_n, rng)
-        child_counts: Dict[AgentId, int] = {}
-        for parent in mut_parents:
-            count = child_counts.get(parent.id, 0) + 1
-            child_counts[parent.id] = count
-            new_id = f"{parent.id}-c{count}"
-            while new_id in pop.agents or new_id in new_pop.agents:
-                count += 1
-                child_counts[parent.id] = count
-                new_id = f"{parent.id}-c{count}"
-            child = mutate_agent(parent, new_id, cfg, rng)
-            new_pop.add(child)
-        # Sexual offspring: two parents from elite, combine traits
-        combo = (cfg.sexual_trait_combination or "average").lower()
-        if combo not in ("average", "crossover"):
-            combo = "average"
-        sex_counter = 0
-        for _ in range(sexual_n):
-            parents = _select_parents_from_pool(
-                list(scored_elite),
-                2,
-                rng,
-                with_replacement=cfg.sexual_parent_with_replacement,
-                fitness_weighted=cfg.sexual_parent_fitness_weighted,
-            )
-            if len(parents) < 2:
-                continue
-            new_id = f"sex-{sex_counter}"
-            while new_id in pop.agents or new_id in new_pop.agents:
-                sex_counter += 1
-                new_id = f"sex-{sex_counter}"
-            sex_counter += 1
-            offspring = combine_agents(parents[0], parents[1], new_id, combo, rng)
-            new_pop.add(offspring)
-        return new_pop
+    # Validate counts: clone + mutate + sexual must exactly fill GA slots and not exceed GA parent count.
+    if cfg.clone_count is None or cfg.mutate_count is None or cfg.sexual_offspring_count is None:
+        raise ValueError("GAConfig must define clone_count, mutate_count, and sexual_offspring_count for count-based GA.")
 
-    # Legacy: elite_fraction + elite_clone_fraction
-    elite_count = max(1, int(slots_for_evolved * cfg.elite_fraction))
-    elites = [a for a, _ in scored[:elite_count]]
+    clone_n = int(cfg.clone_count)
+    mutate_n = int(cfg.mutate_count)
+    sexual_n = int(cfg.sexual_offspring_count)
+    if clone_n < 0 or mutate_n < 0 or sexual_n < 0:
+        raise ValueError("GAConfig counts must be non-negative.")
 
-    for agent in elites:
-        new_pop.add(agent)
-
-    remaining = slots_for_evolved - len(elites)
-    if remaining <= 0:
-        return new_pop
-
-    clone_fraction = max(0.0, min(1.0, cfg.elite_clone_fraction))
-    clone_slots = int(remaining * clone_fraction)
-    mutate_slots = remaining - clone_slots
-
-    clone_counter = 0
-    for _ in range(clone_slots):
-        parent = rng.choice(elites)
-        new_id = f"{parent.id}-clone{clone_counter}"
-        while new_id in pop.agents or new_id in new_pop.agents:
-            clone_counter += 1
-            new_id = f"{parent.id}-clone{clone_counter}"
-        clone_counter += 1
-        clone = Agent(
-            id=new_id,
-            name=parent.name,
-            player_counts=list(parent.player_counts),
-            elo_3p=parent.elo_3p,
-            elo_4p=parent.elo_4p,
-            elo_5p=parent.elo_5p,
-            elo_global=parent.elo_global,
-            generation=parent.generation,
-            traits=dict(parent.traits),
-            checkpoint_path=parent.checkpoint_path,
-            arch_name=parent.arch_name,
-            parents=list(parent.parents),
-            can_use_as_ga_parent=parent.can_use_as_ga_parent,
-            fixed_elo=parent.fixed_elo,
-            clone_only=parent.clone_only,
-            play_in_league=parent.play_in_league,
-            matches_played=0,
-            total_match_score=0.0,
+    total = clone_n + mutate_n + sexual_n
+    if total != slots_for_evolved:
+        raise ValueError(
+            f"GAConfig counts inconsistent with GA slots: clone({clone_n}) + mutate({mutate_n}) + sexual({sexual_n}) = {total}, "
+            f"but slots_for_evolved = {slots_for_evolved}."
         )
-        new_pop.add(clone)
+    if total > len(ga_parents):
+        raise ValueError(
+            f"GAConfig requires {total} GA slots but only {len(ga_parents)} GA parents are available."
+        )
 
-    parents = _roulette_select(scored, mutate_slots, rng)
-    child_counts = {}
-    for parent in parents:
+    # Deterministic bands over sorted GA parents
+    # Band order (by descending fitness): [clones][mutate][sexual-delete]
+    band_parents = ga_parents[:total]
+    clone_band = band_parents[:clone_n]
+    mutate_band = band_parents[clone_n : clone_n + mutate_n]
+    # sexual-delete band is band_parents[clone_n + mutate_n :], but we only need its size (sexual_n)
+
+    # 1) Clone band: carry over elites unchanged (no duplication)
+    for parent in clone_band:
+        new_pop.add(parent)
+
+    # 2) Mutate band: each parent produces exactly one mutated child; parents themselves are not copied
+    child_counts: Dict[AgentId, int] = {}
+    for parent in mutate_band:
         count = child_counts.get(parent.id, 0) + 1
         child_counts[parent.id] = count
         new_id = f"{parent.id}-c{count}"
@@ -410,6 +330,31 @@ def next_generation(
             new_id = f"{parent.id}-c{count}"
         child = mutate_agent(parent, new_id, cfg, rng)
         new_pop.add(child)
+
+    # 3) Sexual band: bottom u GA parents are conceptually deleted; we fill their slots with sexual offspring
+    combo = (cfg.sexual_trait_combination or "average").lower()
+    if combo not in ("average", "crossover"):
+        combo = "average"
+    elite_for_sexual = band_parents[: clone_n + mutate_n]  # parents allowed for sexual reproduction
+    scored_elite: List[Tuple[Agent, float]] = [(a, f) for (a, f) in scored if a in elite_for_sexual]
+    sex_counter = 0
+    for _ in range(sexual_n):
+        parents = _select_parents_from_pool(
+            scored_elite,
+            2,
+            rng,
+            with_replacement=cfg.sexual_parent_with_replacement,
+            fitness_weighted=cfg.sexual_parent_fitness_weighted,
+        )
+        if len(parents) < 2:
+            break
+        new_id = f"sex-{sex_counter}"
+        while new_id in pop.agents or new_id in new_pop.agents:
+            sex_counter += 1
+            new_id = f"sex-{sex_counter}"
+        sex_counter += 1
+        offspring = combine_agents(parents[0], parents[1], new_id, combo, rng)
+        new_pop.add(offspring)
 
     return new_pop
 

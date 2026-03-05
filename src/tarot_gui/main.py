@@ -76,6 +76,8 @@ class MainWindow(QtWidgets.QMainWindow):
         run_section.run_log_loaded.connect(self._on_run_log_loaded)
         run_section.load_population_clicked.connect(self._on_load_population_clicked)
         self._league_tab = league_tab
+        # Keep Dashboard Run section in sync with League tab project selection.
+        league_tab.project_path_changed.connect(self._on_project_path_changed)
         # Configure auto-save location based on initial project, if any.
         self._run_section.configure_auto_save_for_project(league_state.project_path)
         # If the project has an existing run log, show its ELO graph immediately.
@@ -384,8 +386,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rl_block.set_entries(entries)
         self._charts_area.set_current_entries(entries)
 
+    def _on_project_path_changed(self, project_path: str) -> None:
+        """Keep Dashboard Run section and charts in sync when League tab project changes."""
+        self._run_section.configure_auto_save_for_project(project_path or None)
+        self._run_section.update_start_enabled()
+        self._load_project_run_log_into_dashboard(project_path or None)
+
     def _on_league_finished(self, cancelled: bool, paused: bool) -> None:
-        self._run_section.set_buttons_running(False)
+        self._run_section.set_buttons_running(False, paused=paused)
         self._run_section.update_run_status(-1, 0, 0.0, None)
         self._run_section.clear_compute_metrics()
         self._league_worker = None
@@ -411,16 +419,29 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
         if cancelled:
             QtWidgets.QMessageBox.information(self, "League run", "Run cancelled.")
-        elif paused:
-            QtWidgets.QMessageBox.information(self, "League run", "Run paused at end of generation.")
 
     def _on_league_pause(self) -> None:
         if self._league_worker:
             self._league_worker.request_pause()
 
     def _on_league_cancel(self) -> None:
-        if self._league_control:
+        # If a worker is running, request cancel through the control.
+        if self._league_worker is not None and self._league_control is not None:
             self._league_control.request_cancel()
+            return
+        # If no worker is running but the UI is in a paused state, treat Cancel as "wipe run"
+        # so the user can start over cleanly.
+        self._run_section.set_buttons_running(False, paused=False)
+        self._run_section.clear_compute_metrics()
+        # Clear in-memory step entries and dashboard metrics
+        self._step_entries = []
+        self._elo_block.set_entries([])
+        self._rl_block.set_entries([])
+        self._charts_area.set_current_entries([])
+        # Reset league state generation index / summary
+        state = self._league_tab.state()
+        state.generation_index = 0
+        state.last_summary = None
 
     def _make_agents_tab(self) -> QtWidgets.QWidget:
         inner = QtWidgets.QWidget()

@@ -41,6 +41,8 @@ class LeagueConfig:
     # ELO update parameters
     elo_k_factor: float = 32.0
     elo_margin_scale: float = 50.0
+    # Whether to normalize ELO after GA so the new generation's mean equals the previous generation's mean.
+    normalize_elo_mean: bool = True
     # PPO fine-tuning (optional; 0 disables)
     ppo_top_k: int = 0
     ppo_updates_per_agent: int = 0
@@ -234,9 +236,10 @@ def run_league_generation(
 
     fitness_fn = _fitness_fn_from_config(cfg)
     new_pop = next_generation(pop, cfg.ga_config, rng=rng, fitness_fn=fitness_fn)
-    # Normalize ELO so the new generation's average equals the previous generation's
+    # Optional ELO normalization so the new generation's average equals the previous generation's
     # (shift only non-fixed_elo agents)
-    normalize_elo_to_target_mean(new_pop, summary["elo_mean"])
+    if cfg.normalize_elo_mean:
+        normalize_elo_to_target_mean(new_pop, summary["elo_mean"])
     return new_pop, summary
 
 

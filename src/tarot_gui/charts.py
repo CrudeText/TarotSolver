@@ -662,9 +662,16 @@ class MutationDistWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.setMinimumHeight(60)
         self._mutation_std = 0.1
+        # Fraction of traits mutated per generation (0.0–1.0); used only for visualization.
+        self._mutation_prob = 0.5
 
     def set_mutation_std(self, std: float) -> None:
         self._mutation_std = max(0.01, std)
+        self.update()
+
+    def set_mutation_prob(self, prob: float) -> None:
+        """Set mutation probability (0.0–1.0) for visualization."""
+        self._mutation_prob = max(0.0, min(1.0, prob))
         self.update()
 
     def paintEvent(self, event: QtCore.QEvent) -> None:
@@ -749,7 +756,48 @@ class MutationDistWidget(QtWidgets.QWidget):
             painter.setPen(QtGui.QPen(_rgb(0x9B59B6), 2))
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
+
+            # Sample dots under the curve to illustrate how many traits are actually mutated.
+            # A fixed number of samples is drawn; the fraction of "active" (colored) dots equals
+            # the mutation probability. All dots are positioned inside the filled Gaussian region.
+            num_samples = 80
+            active_count = int(self._mutation_prob * num_samples + 0.5)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            active_brush = QtGui.QBrush(QtGui.QColor(0x50, 0xC8, 0x78, 230))  # emerald-ish
+            import random
+
+            rng = random.Random(12345)
+            max_pdf = _gaussian(0, 0, std)
+            for i in range(active_count):
+                # Sample x from N(0, std), truncated to visible range
+                x_val = 0.0
+                if std > 0:
+                    for _retry in range(8):
+                        x_val = rng.gauss(0.0, std)
+                        if x_min <= x_val <= x_max:
+                            break
+                    else:
+                        x_val = max(x_min, min(x_max, x_val))
+                # Map x to pixel coordinate
+                t = (x_val - x_min) / x_range
+                px = gx + 4 + (gw - 8) * t
+                # Compute corresponding curve y (on the Gaussian) and place dot at a random
+                # vertical position **under** that curve, down to the x-axis, so every dot
+                # lives somewhere inside the filled region.
+                pdf = _gaussian(x_val, 0, std) if std > 0 else 0.0
+                y_norm = pdf / max_pdf if max_pdf > 0 else 0.0
+                curve_py = gy + gh - 4 - y_norm * (gh - 8)
+                bottom_py = gy + gh - 4
+                # Randomly interpolate between curve edge (top of filled region) and bottom.
+                t_y = rng.random()
+                py = curve_py + t_y * (bottom_py - curve_py)
+                painter.setBrush(active_brush)
+                painter.drawEllipse(QtCore.QPointF(px, py), 2.6, 2.6)
             painter.setPen(QtGui.QPen(pen_color, 1))
-            painter.drawText(int(gx + gw + 4), int(gy + gh // 2 + 4), f"σ={std:.2f}")
+            painter.drawText(
+                int(gx + gw + 4),
+                int(gy + gh // 2 + 4),
+                f"σ={std:.2f}\nmut%={self._mutation_prob*100:.1f}",
+            )
         finally:
             painter.end()

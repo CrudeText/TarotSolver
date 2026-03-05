@@ -639,10 +639,9 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 | 7 | Compute | **Default device:** CPU or CUDA (detected); user selects in Settings. League runs and PPO use the selected device. |
 | 8 | Storage | Results only by default; user can choose to save specific games (e.g. finals) in advance. |
 | 9 | GUI priority | Start simple (tournaments, results, training, metrics); spectate and play-vs-AI later. |
-| 10 | Action space | Separate bidding phase and playing phase (two distinct decision steps). |
-| 11 | GUI tech | Desktop. |
-| 12 | Personality traits | Models have modular, human-readable traits; **descriptive by default** (metadata only); conditioning optional later. |
-| 13 | One model vs per–player-count | Agents can support multiple player counts; we track **per–player-count ELOs** and a **global ELO** so that a single agent can be viewed as a “global player” while still seeing which variants it excels at. |
+| 10 | GUI tech | Desktop. |
+| 11 | Personality traits | Models have modular, human-readable traits; **descriptive by default** (metadata only); conditioning optional later. |
+| 12 | One model vs per–player-count | Agents can support multiple player counts; we track **per–player-count ELOs** and a **global ELO** so that a single agent can be viewed as a “global player” while still seeing which variants it excels at. |
 
 ---
 
@@ -678,56 +677,9 @@ At the **bottom** of the League Parameters board: **two flow rows**. **Row 1:** 
 
 ---
 
-## 10. Pre-start: elements to decide or clarify
-
-Before or as we start implementation, the following should be agreed or clarified so we don’t have to rework later. All pre-start items are now resolved (see Summary of decisions and Next steps).
-
-### Must resolve before Phase 1 (game engine)
-
-| Item | Why it matters |
-|------|----------------|
-| **Rules checklist** | The plan refers to `Règlement Tarot.pdf` but there is no extracted checklist yet. The engine needs exact 4p rules: cards per player, dog size, deal order, bidding order, which contracts (Petite, Garde, Garde sans, Garde contre?), when the dog is shown, scoring formula, handling of Excuse, etc. **Options:** (a) Create `RULES_CHECKLIST.md` (or `docs/rules.md`) from the PDF first and tick off as we implement, or (b) Implement in parallel and document rules as we go. |
-| **Match scoring** | “Points as in the official game” — confirm whether we use raw deal points summed over the match, or the règlement’s conversion (e.g. deal points × contract multiplier → “game points”) and then sum game points per player. Affects both engine and tournament ranking. |
-| **Tie-breaking in a match** | If two (or more) players have the same total points at the end of a match, how do we rank them? (Règlement may define this; if not, we need a rule.) |
-
-### Should resolve early (Phase 1–2) but not blocking
-
-| Item | Why it matters |
-|------|----------------|
-| **Observation format (flat vs structured)** | §4.5 leaves this “TBD at Phase 2”. Recommendation is “start flat”. We can lock this when starting Phase 2; Phase 1 is independent. |
-| **Action space (single vs separate bid/play)** | One global action space vs separate “bid” and “play card” phases affects the env API. Can be decided at the start of Phase 2. |
-| **GUI tech** | §8: “Desktop or web? Your preference?” — Choosing early influences project layout and dependencies; can still be decided when starting Phase 6. |
-| **GUI priority** | “Minimal first vs spectate/play-vs-AI early” (Summary #9) — Affects order of GUI features; can be set when we start Phase 6. |
-
-### Can defer until later phases
-
-| Item | When to decide |
-|------|----------------|
-| **Tournament matchmaking** | “Top half by score” vs “bracket-based” (and whether we support both) — Phase 5. |
-| **Personality traits: learned vs fixed** | Whether traits are learned (emergent) or user-set conditioning — Phase 4 / trait design. |
-| **Project structure & tooling** | Repo layout, Python version, dependency manager (pip/poetry/conda) — Can be fixed when creating the repo at start of Phase 1. |
-
-### Summary: minimum to unblock Phase 1
-
-1. **Rules source:** Either create a short **rules checklist** from the PDF (4p: deal, dog, bidding, play, scoring) or agree to document rules as we implement from the PDF.
-2. **Match scoring:** Confirm how match total is computed (raw sum of deal points vs game-point conversion).
-3. **Tie-breaking:** Define how to rank players when match points are tied.
-
-Once these are clear, Phase 1 can start; the rest can be decided as we reach each phase.
-
----
-
 ## 11. Next steps
 
-1. ~~You answer the questions above.~~ **Done.**
-2. ~~Update this game plan with your choices.~~ **Done.**
-3. ~~Resolve pre-start items (§10).~~ **Done** (rules in `docs/rules.md`, official match scoring, tie-breaking noted).
-4. ~~Phase 1 (game engine, 3/4/5 players).~~ **Done.** Engine in `src/tarot/`: deck, deal, bidding, play, scoring, game; Excuse, match, poignée, chelem. See README.
-5. ~~Phase 2 (model interface, observation/action, env wrapper).~~ **Done.** Flat obs + global action space + `TarotEnv3P/4P/5P` with tests.
-6. ~~Phase 3 (baselines & validation).~~ **Done.** `RandomAgent`, engine/env/tournament tests, simple CLI/usage examples.
-7. ~~Phase 4 (RL training).~~ **Done.** Custom PyTorch PPO trainer, checkpointing, `tarot train-ppo-4p` / `tarot eval-4p`, `NNPolicy` loader.
-8. ~~Phase 5 (tournaments + league + GA).~~ **Done (backend).** `run_round_with_policies`, GA helpers, `run_league_generation`, `tarot league-4p` CLI with JSON logs.
-9. **Phase 6 (GUI).**
+1. **Phase 6 (GUI).**
    - Current: PySide6 app with tabs for Dashboard, League Parameters, Agents, Play, Settings. **League Parameters** tab is functional (layout, population, config, export now). **Dashboard** run controls are wired:
      - **Option C layout:** Content width bound to viewport; two flow rows — Tournament | Next Generation (row 1), Fitness | Reproduction (row 2). Population in scroll area with table scrolling internally when many rows.
      - Population: tools row above table; pie + metrics + Group by on left; agent groups table; columns ResizeToContents except Group name (Stretch).
@@ -740,9 +692,6 @@ Once these are clear, Phase 1 can start; the rest can be decided as we reach eac
      - Export during run: respect Export when/what in generation callback.
      - Implement basic Agents list from league logs plus Hall-of-Fame view.
      - Add a simple Play flow using existing engine/env policies (e.g. run one match, show textual summary).
-10. **Project management & experiment tracking (§8.5).**
-    - Done: Project save/load (directory + export to JSON), log persistence, GUI actions.
-    - Planned: Resume training (§8.5.2), auto-save (§8.5.4), experiment comparison (§8.5.5), agent lineage (§8.5.6), run report (§8.5.7).
 
 ### Dashboard — next session ideas
 

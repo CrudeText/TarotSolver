@@ -49,7 +49,14 @@ def test_run_league_generation_with_ga_only():
         rounds_per_generation=1,
         ppo_top_k=0,
         ppo_updates_per_agent=0,
-        ga_config=GAConfig(population_size=4, elite_fraction=0.25, mutation_prob=1.0, mutation_std=0.1),
+        ga_config=GAConfig(
+            population_size=4,
+            clone_count=1,
+            mutate_count=2,
+            sexual_offspring_count=1,
+            mutation_prob=1.0,
+            mutation_std=0.1,
+        ),
     )
 
     new_pop, summary = run_league_generation(pop, cfg, rng=random.Random(1))
@@ -68,7 +75,14 @@ def test_run_league_generations_yields_per_generation():
         rounds_per_generation=1,
         ppo_top_k=0,
         ppo_updates_per_agent=0,
-        ga_config=GAConfig(population_size=4, elite_fraction=0.25, mutation_prob=1.0, mutation_std=0.1),
+        ga_config=GAConfig(
+            population_size=4,
+            clone_count=1,
+            mutate_count=2,
+            sexual_offspring_count=1,
+            mutation_prob=1.0,
+            mutation_std=0.1,
+        ),
     )
     gen = run_league_generations(pop, cfg, num_generations=3, rng=random.Random(2))
     results = list(gen)

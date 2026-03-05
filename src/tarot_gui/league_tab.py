@@ -526,10 +526,18 @@ class LeagueRunWorker(QtCore.QThread):
         checkpoint_base_dir = str(get_checkpoint_base_dir(self._project_path))
         cancelled = False
         paused = False
+
+        class _PauseRequested(Exception):
+            """Internal sentinel to stop the run due to a pause request."""
+
         try:
             def _on_round(gen_idx: int, round_idx: int, round_summary: Dict[str, float]) -> None:
                 # Emit per-match updates so the GUI can update ELO / RL blocks at match resolution.
                 self.match_done.emit(gen_idx, round_idx, self._pop, round_summary)
+                # If a pause was requested, stop after this round (match) instead of waiting
+                # for the end of the whole generation.
+                if self._pause_requested:
+                    raise _PauseRequested()
 
             gen_iter = run_league_generations(
                 self._pop,
@@ -551,6 +559,8 @@ class LeagueRunWorker(QtCore.QThread):
                 if self._pause_requested:
                     paused = True
                     break
+        except _PauseRequested:
+            paused = True
         except Exception:
             cancelled = True
             raise
@@ -562,25 +572,45 @@ class LeagueRunWorker(QtCore.QThread):
         rng = random.Random(self._rng_seed)
         log_path = get_log_path(self._project_path)
         checkpoint_base_dir = str(get_checkpoint_base_dir(self._project_path))
-        gen_iter = run_league_generations(
-            self._pop,
-            self._cfg,
-            num_generations=self._num_generations,
-            rng=rng,
-            control=self._control,
-            checkpoint_base_dir=checkpoint_base_dir,
-            device=self._device,
-            log_path=str(log_path),
-        )
-        for new_pop, summary, gen_idx in gen_iter:
-            self.generation_done.emit(gen_idx, new_pop, summary)
-            if self._control.cancel_requested.is_set() or self._pause_requested:
-                break
-        self.finished_run.emit(self._control.cancel_requested.is_set(), self._pause_requested)
+        class _PauseRequested(Exception):
+            """Internal sentinel to stop the run due to a pause request (sync mode)."""
+
+        def _on_round(gen_idx: int, round_idx: int, round_summary: Dict[str, float]) -> None:
+            self.match_done.emit(gen_idx, round_idx, self._pop, round_summary)
+            if self._pause_requested:
+                raise _PauseRequested()
+
+        cancelled = False
+        paused = False
+        try:
+            gen_iter = run_league_generations(
+                self._pop,
+                self._cfg,
+                num_generations=self._num_generations,
+                rng=rng,
+                control=self._control,
+                checkpoint_base_dir=checkpoint_base_dir,
+                device=self._device,
+                log_path=str(log_path),
+                on_round=_on_round,
+            )
+            for new_pop, summary, gen_idx in gen_iter:
+                self._pop = new_pop
+                self.generation_done.emit(gen_idx, new_pop, summary)
+                if self._control.cancel_requested.is_set():
+                    cancelled = True
+                    break
+                if self._pause_requested:
+                    paused = True
+                    break
+        except _PauseRequested:
+            paused = True
+        finally:
+            self.finished_run.emit(cancelled, paused)
 
 
 class RunSectionWidget(QtWidgets.QWidget):
-    """Run controls (Start, Pause, Cancel), ELO metrics, run log path and Save/Load. Placed in Dashboard tab."""
+    """Run controls (Start, Pause/Resume, Cancel), compute metrics, run log path and Save/Load. Placed in Dashboard tab."""
 
     start_clicked = QtCore.Signal()
     pause_clicked = QtCore.Signal()
@@ -598,18 +628,20 @@ class RunSectionWidget(QtWidgets.QWidget):
         self._state = state
         self._run_log_manager = run_log_manager
         self._auto_save_dir: Optional[str] = None
+        self._is_paused: bool = False
 
         layout = QtWidgets.QHBoxLayout(self)
 
-        # --- Run box: Start / Pause / Cancel + status + compute ---
+        # --- Run box: Start / Pause/Resume / Cancel + compute ---
         run_group = QtWidgets.QGroupBox("Run")
         run_layout = QtWidgets.QVBoxLayout(run_group)
         buttons_row = QtWidgets.QHBoxLayout()
         self._btn_start = QtWidgets.QPushButton("Start")
-        self._btn_pause = QtWidgets.QPushButton("Pause at next generation")
-        self._btn_cancel = QtWidgets.QPushButton("Cancel")
+        self._btn_pause = QtWidgets.QPushButton("Pause")
+        self._btn_cancel = QtWidgets.QPushButton("Wipe run")
         self._btn_pause.setEnabled(False)
         self._btn_cancel.setEnabled(False)
+        self._btn_cancel.setVisible(False)
         self._btn_start.clicked.connect(self._on_start_clicked)
         self._btn_pause.clicked.connect(self._on_pause_clicked)
         self._btn_cancel.clicked.connect(self._on_cancel_clicked)
@@ -619,9 +651,9 @@ class RunSectionWidget(QtWidgets.QWidget):
         buttons_row.addStretch(1)
         run_layout.addLayout(buttons_row)
 
-        # One-line status: generation X of Y, elapsed, ETA
+        # One-line status: generation X of Y, elapsed, ETA (hidden; Compute block shows timing)
         self._label_status = QtWidgets.QLabel("Status: —")
-        run_layout.addWidget(self._label_status)
+        self._label_status.setVisible(False)
 
         # Inline compute metrics (time used, ETA, avg/gen)
         self._compute_block = ComputeBlockWidget()
@@ -691,7 +723,11 @@ class RunSectionWidget(QtWidgets.QWidget):
         self.start_clicked.emit()
 
     def _on_pause_clicked(self) -> None:
-        self.pause_clicked.emit()
+        # When running: interpret as Pause. When already paused: interpret as Resume.
+        if self._is_paused:
+            self.start_clicked.emit()
+        else:
+            self.pause_clicked.emit()
 
     def _on_cancel_clicked(self) -> None:
         self.cancel_clicked.emit()
@@ -845,11 +881,11 @@ class RunSectionWidget(QtWidgets.QWidget):
         elapsed_seconds: time since run start.
         eta_seconds: estimated seconds remaining (None for first gens or when not running).
         """
+        # Status text is currently hidden from the UI; Compute block shows timing instead.
         if gen_index < 0 or total_generations <= 0:
             self._label_status.setText("Status: —")
             return
-        # Generation X of Y (1-based display)
-        x = gen_index + 1
+        x = gen_index + 1  # Generation X of Y (1-based display)
         y = total_generations
         elapsed_str = _format_duration(elapsed_seconds)
         if eta_seconds is None:
@@ -860,15 +896,39 @@ class RunSectionWidget(QtWidgets.QWidget):
             f"Generation {x} of {y}  |  Elapsed: {elapsed_str}  |  ETA: {eta_str}"
         )
 
-    def set_buttons_running(self, running: bool) -> None:
-        """Enable Pause/Cancel and disable Start when running; when idle, enable Start only if project loaded."""
-        self._btn_start.setEnabled(not running and bool(self._state.project_path))
-        self._btn_pause.setEnabled(running)
-        self._btn_cancel.setEnabled(running)
+    def set_buttons_running(self, running: bool, paused: bool = False) -> None:
+        """
+        Update Start / Pause / Cancel buttons for running / paused / idle states.
+
+        - running=True: Start disabled, Pause enabled ("Pause"), Cancel hidden.
+        - running=False, paused=True: Start disabled, Pause enabled ("Resume"), Cancel visible+enabled.
+        - running=False, paused=False: idle; Start enabled if project loaded, Pause/Cancel disabled+hidden.
+        """
+        self._is_paused = paused
+        if running:
+            self._btn_start.setEnabled(False)
+            self._btn_pause.setEnabled(True)
+            self._btn_pause.setText("Pause")
+            self._btn_cancel.setEnabled(False)
+            self._btn_cancel.setVisible(False)
+            return
+        # Not running: paused or idle
+        if paused:
+            self._btn_start.setEnabled(False)
+            self._btn_pause.setEnabled(True)
+            self._btn_pause.setText("Resume")
+            self._btn_cancel.setEnabled(True)
+            self._btn_cancel.setVisible(True)
+        else:
+            self._btn_pause.setEnabled(False)
+            self._btn_pause.setText("Pause")
+            self._btn_cancel.setEnabled(False)
+            self._btn_cancel.setVisible(False)
+            self._btn_start.setEnabled(bool(self._state.project_path))
 
     def update_start_enabled(self) -> None:
         """Enable Start only when a project is loaded and not running (call when project or run state changes)."""
-        if not self._btn_pause.isEnabled():
+        if not self._btn_pause.isEnabled() and not self._is_paused:
             self._btn_start.setEnabled(bool(self._state.project_path))
 
     def showEvent(self, event: QtCore.QEvent) -> None:
@@ -918,6 +978,8 @@ class RunSectionWidget(QtWidgets.QWidget):
 class LeagueTabWidget(QtWidgets.QWidget):
     """League Parameters tab: groups table, config sections, export."""
 
+    project_path_changed = QtCore.Signal(str)
+
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._state = LeagueTabState()
@@ -939,7 +1001,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         POPULATION_HEIGHT = 460  # enough for pie, insights, tools, and table fully visible
         ARROW_HEIGHT = 14
         FLOW_ROW_SPACING = 12
-        FLOW_BOX_HEIGHT_ROW1 = 320  # Tournament, Next Generation
+        FLOW_BOX_HEIGHT_ROW1 = 220  # Tournament (reduced height)
         FLOW_BOX_HEIGHT_ROW2 = 494  # Fitness, Reproduction (taller; ~30% increase from 380)
         FLOW_GRAPH_MIN_HEIGHT = 260  # Min height for Fitness line chart and Reproduction mutation-dist graph (identical)
         CONTENT_HEIGHT_1080P = (
@@ -1279,17 +1341,15 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._combo_league_style.setToolTip("ELO-based: pair similar-strength agents. Random: random table assignment.")
         self._spin_deals.setToolTip("Number of deals played in each match. More deals give more stable ELO updates.")
         self._spin_matches.setToolTip("Number of tournament rounds per generation. More rounds refine ELO rankings.")
-        tour_layout.addWidget(tour_core)
 
         # ELO tuning: checkbox (on by default), params always visible but greyed when unchecked
         self._cb_elo_tuning = QtWidgets.QCheckBox("ELO tuning")
         self._cb_elo_tuning.setChecked(True)
         self._cb_elo_tuning.toggled.connect(self._update_tour_elo_enabled)
-        tour_layout.addWidget(self._cb_elo_tuning)
         self._tour_elo_frame = QtWidgets.QFrame()
         self._tour_elo_frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self._tour_elo_frame.setEnabled(True)
-        elo_layout = QtWidgets.QHBoxLayout(self._tour_elo_frame)
+        elo_layout = QtWidgets.QVBoxLayout(self._tour_elo_frame)
         self._spin_elo_k = QtWidgets.QDoubleSpinBox()
         self._spin_elo_k.setRange(1, 100)
         self._spin_elo_k.setValue(32)
@@ -1300,27 +1360,39 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_elo_margin.setValue(50)
         self._spin_elo_margin.setMinimumWidth(56)
         self._spin_elo_margin.setToolTip("Scale for score-diff to result mapping. Affects how big wins influence ELO.")
+        # Row 1: ELO K-factor
+        elo_row1 = QtWidgets.QHBoxLayout()
         lbl_elo_k = QtWidgets.QLabel("ELO K-factor:")
         lbl_elo_k.setToolTip("Max ELO change per pairwise comparison. Higher = faster rating changes.")
-        elo_layout.addWidget(lbl_elo_k)
-        elo_layout.addWidget(self._spin_elo_k)
-        elo_layout.addSpacing(12)
+        elo_row1.addWidget(lbl_elo_k)
+        elo_row1.addWidget(self._spin_elo_k)
+        elo_row1.addStretch()
+        # Row 2: ELO margin scale
+        elo_row2 = QtWidgets.QHBoxLayout()
         lbl_elo_margin = QtWidgets.QLabel("ELO margin scale:")
         lbl_elo_margin.setToolTip("Scale for score-diff to result mapping. Affects how big wins influence ELO.")
-        elo_layout.addWidget(lbl_elo_margin)
-        elo_layout.addWidget(self._spin_elo_margin)
-        elo_layout.addStretch()
-        tour_layout.addWidget(self._tour_elo_frame)
+        elo_row2.addWidget(lbl_elo_margin)
+        elo_row2.addWidget(self._spin_elo_margin)
+        elo_row2.addStretch()
+        elo_layout.addLayout(elo_row1)
+        elo_layout.addLayout(elo_row2)
+
+        # ELO normalization toggle: keep mean ELO stable across generations when enabled
+        self._cb_elo_normalize = QtWidgets.QCheckBox("Normalize ELO mean between generations")
+        self._cb_elo_normalize.setChecked(True)
+        self._cb_elo_normalize.setToolTip(
+            "When checked, shift non-fixed ELOs after GA so the new generation's mean global ELO "
+            "matches the previous generation's mean."
+        )
 
         # PPO fine-tuning: checkbox (on by default), params always visible but greyed when unchecked
         self._cb_ppo = QtWidgets.QCheckBox("PPO fine-tuning")
         self._cb_ppo.setChecked(True)
         self._cb_ppo.toggled.connect(self._update_tour_ppo_enabled)
-        tour_layout.addWidget(self._cb_ppo)
         self._tour_ppo_frame = QtWidgets.QFrame()
         self._tour_ppo_frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self._tour_ppo_frame.setEnabled(True)
-        ppo_layout = QtWidgets.QHBoxLayout(self._tour_ppo_frame)
+        ppo_layout = QtWidgets.QVBoxLayout(self._tour_ppo_frame)
         self._spin_ppo_top_k = QtWidgets.QSpinBox()
         self._spin_ppo_top_k.setRange(0, 999)
         self._spin_ppo_top_k.setValue(0)
@@ -1331,17 +1403,65 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_ppo_updates.setValue(0)
         self._spin_ppo_updates.setMinimumWidth(56)
         self._spin_ppo_updates.setToolTip("Number of PPO update steps per agent when top-K > 0.")
+        # Row 1: PPO top-K
+        ppo_row1 = QtWidgets.QHBoxLayout()
         lbl_ppo_k = QtWidgets.QLabel("PPO top-K:")
         lbl_ppo_k.setToolTip("0 = disabled. Top-K agents by fitness get PPO fine-tuning each generation.")
-        ppo_layout.addWidget(lbl_ppo_k)
-        ppo_layout.addWidget(self._spin_ppo_top_k)
-        ppo_layout.addSpacing(12)
+        ppo_row1.addWidget(lbl_ppo_k)
+        ppo_row1.addWidget(self._spin_ppo_top_k)
+        ppo_row1.addStretch()
+        # Row 2: PPO updates/agent
+        ppo_row2 = QtWidgets.QHBoxLayout()
         lbl_ppo_updates = QtWidgets.QLabel("PPO updates/agent:")
         lbl_ppo_updates.setToolTip("Number of PPO update steps per agent when top-K > 0.")
-        ppo_layout.addWidget(lbl_ppo_updates)
-        ppo_layout.addWidget(self._spin_ppo_updates)
-        ppo_layout.addStretch()
-        tour_layout.addWidget(self._tour_ppo_frame)
+        ppo_row2.addWidget(lbl_ppo_updates)
+        ppo_row2.addWidget(self._spin_ppo_updates)
+        ppo_row2.addStretch()
+        ppo_layout.addLayout(ppo_row1)
+        ppo_layout.addLayout(ppo_row2)
+
+        # Generations: total number of generations to run (moved from Next Generation box)
+        gens_row = QtWidgets.QHBoxLayout()
+        self._spin_generations = QtWidgets.QSpinBox()
+        self._spin_generations.setRange(1, 9999)
+        self._spin_generations.setValue(10)
+        self._spin_generations.setToolTip("Total number of generations to run.")
+        lbl_gens = QtWidgets.QLabel("Generations:")
+        lbl_gens.setToolTip("Total number of generations to run.")
+        gens_row.addWidget(lbl_gens)
+        gens_row.addWidget(self._spin_generations)
+        gens_row.addStretch()
+        core_layout.addRow(gens_row)
+
+        # Assemble Tournament box as three columns: left (core + generations), middle (ELO tuning),
+        # right (PPO fine-tuning).
+        tour_columns = QtWidgets.QHBoxLayout()
+
+        left_col_widget = QtWidgets.QWidget()
+        left_col_layout = QtWidgets.QVBoxLayout(left_col_widget)
+        left_col_layout.setContentsMargins(0, 0, 0, 0)
+        left_col_layout.addWidget(tour_core)
+        left_col_layout.addStretch()
+
+        middle_col_widget = QtWidgets.QWidget()
+        middle_col_layout = QtWidgets.QVBoxLayout(middle_col_widget)
+        middle_col_layout.setContentsMargins(0, 0, 0, 0)
+        middle_col_layout.addWidget(self._cb_elo_tuning)
+        middle_col_layout.addWidget(self._tour_elo_frame)
+        middle_col_layout.addWidget(self._cb_elo_normalize)
+        middle_col_layout.addStretch()
+
+        right_col_widget = QtWidgets.QWidget()
+        right_col_layout = QtWidgets.QVBoxLayout(right_col_widget)
+        right_col_layout.setContentsMargins(0, 0, 0, 0)
+        right_col_layout.addWidget(self._cb_ppo)
+        right_col_layout.addWidget(self._tour_ppo_frame)
+        right_col_layout.addStretch()
+
+        tour_columns.addWidget(left_col_widget, 2)
+        tour_columns.addWidget(middle_col_widget, 1)
+        tour_columns.addWidget(right_col_widget, 1)
+        tour_layout.addLayout(tour_columns)
 
         self._tour_insights = QtWidgets.QLabel("Tables/round: —  Matches/gen: —  Deals/agent: —")
         self._tour_insights.setWordWrap(True)
@@ -1491,7 +1611,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         # 2. Selection bar with color legend and Fitness arrow
         self._reproduction_bar_widget = ReproductionBarWidget()
         mut_layout.addWidget(self._reproduction_bar_widget, 0)
-        # 3. Mutation std and Trait prob (no frame background; placed close to bar)
+        # 3. Mutation std and Trait Mutation prob (no frame background; placed close to bar)
         mut_std_row = QtWidgets.QHBoxLayout()
         lbl_mut_std = QtWidgets.QLabel("Mutation std:")
         lbl_mut_std.setToolTip("Standard deviation of the Gaussian used to perturb traits.")
@@ -1502,7 +1622,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_mut_std.setSingleStep(0.01)
         self._spin_mut_std.setMinimumWidth(72)
         self._spin_mut_std.setToolTip("Standard deviation of the Gaussian used to perturb traits.")
-        lbl_trait_prob = QtWidgets.QLabel("Trait prob:")
+        lbl_trait_prob = QtWidgets.QLabel("Trait mutation prob:")
         lbl_trait_prob.setToolTip("Probability that a trait is perturbed when creating a mutant offspring.")
         self._spin_trait_prob = QtWidgets.QDoubleSpinBox()
         self._spin_trait_prob.setRange(0, 100)
@@ -1532,130 +1652,29 @@ class LeagueTabWidget(QtWidgets.QWidget):
             spin.valueChanged.connect(self._update_ga_visual)
         flow_row2.addWidget(mut_group, 1)
 
-        # Next Generation block: Run + Export (no checkbox; export options always visible)
-        next_group = QtWidgets.QGroupBox("Next Generation")
-        next_layout = QtWidgets.QVBoxLayout(next_group)
-        self._spin_generations = QtWidgets.QSpinBox()
-        self._spin_generations.setRange(1, 9999)
-        self._spin_generations.setValue(10)
-        self._spin_generations.setToolTip("Total number of generations to run.")
-        run_form = QtWidgets.QFormLayout()
-        lbl_gens = QtWidgets.QLabel("Generations:")
-        lbl_gens.setToolTip("Total number of generations to run.")
-        run_form.addRow(lbl_gens, self._spin_generations)
-        next_layout.addLayout(run_form)
-        self._next_export_frame = QtWidgets.QFrame()
-        self._next_export_frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        export_main_layout = QtWidgets.QHBoxLayout(self._next_export_frame)
-
-        # Left: normal export options
-        export_left = QtWidgets.QWidget()
-        export_layout = QtWidgets.QVBoxLayout(export_left)
-        export_layout.setContentsMargins(0, 0, 0, 0)
-        export_sep = QtWidgets.QLabel("Population Export")
-        export_sep.setStyleSheet("color: #888; font-weight: bold;")
-        export_layout.addWidget(export_sep)
+        # Hidden Export & Hall of Fame controls (no visible box on League Parameters tab).
+        # These widgets are kept for state persistence and tests, and may be wired into
+        # Dashboard export/HOF flows, but are not added to this tab's layout.
         self._combo_export_when = QtWidgets.QComboBox()
         self._combo_export_when.addItems(["On demand only", "Every generation", "Every N generations"])
-        self._combo_export_when.setItemData(0, "Export manually.", QtCore.Qt.ItemDataRole.ToolTipRole)
-        self._combo_export_when.setItemData(1, "Auto-export after each generation.", QtCore.Qt.ItemDataRole.ToolTipRole)
-        self._combo_export_when.setItemData(2, "Auto-export every N generations.", QtCore.Qt.ItemDataRole.ToolTipRole)
         self._spin_export_every_n = QtWidgets.QSpinBox()
         self._spin_export_every_n.setRange(1, 999)
         self._spin_export_every_n.setValue(5)
-        self._spin_export_every_n.setEnabled(False)
-        def _on_export_when_changed() -> None:
-            self._spin_export_every_n.setEnabled(self._combo_export_when.currentIndex() == 2)
-        self._combo_export_when.currentIndexChanged.connect(_on_export_when_changed)
-        export_row = QtWidgets.QHBoxLayout()
-        lbl_export_when = QtWidgets.QLabel("Export when:")
-        lbl_export_when.setToolTip("When to auto-export: on demand only, every generation, or every N generations.")
-        export_row.addWidget(lbl_export_when)
-        export_row.addWidget(self._combo_export_when)
-        export_row.addSpacing(12)
-        lbl_export_n = QtWidgets.QLabel("Every N gens:")
-        lbl_export_n.setToolTip("Export population every N generations (used when Export when = Every N generations).")
-        export_row.addWidget(lbl_export_n)
-        export_row.addWidget(self._spin_export_every_n)
-        export_row.addStretch()
-        export_layout.addLayout(export_row)
         self._combo_export_what = QtWidgets.QComboBox()
         self._combo_export_what.addItems(["Full population", "Top N by ELO", "GA-eligible only"])
-        export_form_row = QtWidgets.QFormLayout()
-        lbl_export_what = QtWidgets.QLabel("Export what:")
-        lbl_export_what.setToolTip("What to include in the exported population: full, top N by ELO, or GA-eligible agents only.")
-        export_form_row.addRow(lbl_export_what, self._combo_export_what)
-        export_layout.addLayout(export_form_row)
-        btn_export = QtWidgets.QPushButton("Export now")
-        btn_export.clicked.connect(self._on_export_now)
-        export_layout.addWidget(btn_export)
-        export_main_layout.addWidget(export_left, 1)
-
-        # Right: Hall of Fame block
-        hof_widget = QtWidgets.QWidget()
-        hof_layout = QtWidgets.QVBoxLayout(hof_widget)
-        hof_layout.setContentsMargins(16, 0, 0, 0)
-        hof_sep = QtWidgets.QLabel("Hall of Fame")
-        hof_sep.setStyleSheet("color: #888; font-weight: bold;")
-        hof_layout.addWidget(hof_sep)
         self._combo_hof_when = QtWidgets.QComboBox()
         self._combo_hof_when.addItems(["On demand only", "Every generation", "Every N generations"])
-        self._combo_hof_when.setItemData(0, "Add to HOF only when you click Export HOF now.", QtCore.Qt.ItemDataRole.ToolTipRole)
-        self._combo_hof_when.setItemData(1, "After each generation, add selected agents to the Hall of Fame.", QtCore.Qt.ItemDataRole.ToolTipRole)
-        self._combo_hof_when.setItemData(2, "Add to HOF every N generations.", QtCore.Qt.ItemDataRole.ToolTipRole)
         self._spin_hof_every_n = QtWidgets.QSpinBox()
         self._spin_hof_every_n.setRange(1, 999)
         self._spin_hof_every_n.setValue(5)
-        self._spin_hof_every_n.setEnabled(False)
-
-        def _on_hof_when_changed() -> None:
-            self._spin_hof_every_n.setEnabled(self._combo_hof_when.currentIndex() == 2)
-        self._combo_hof_when.currentIndexChanged.connect(_on_hof_when_changed)
-        hof_when_row = QtWidgets.QHBoxLayout()
-        lbl_hof_when = QtWidgets.QLabel("HOF when:")
-        lbl_hof_when.setToolTip("When to add agents to the Hall of Fame.")
-        hof_when_row.addWidget(lbl_hof_when)
-        hof_when_row.addWidget(self._combo_hof_when)
-        hof_when_row.addSpacing(12)
-        lbl_hof_n = QtWidgets.QLabel("Every N gens:")
-        lbl_hof_n.setToolTip("Add to HOF every N generations (used when HOF when = Every N generations).")
-        hof_when_row.addWidget(lbl_hof_n)
-        hof_when_row.addWidget(self._spin_hof_every_n)
-        hof_when_row.addStretch()
-        hof_layout.addLayout(hof_when_row)
         self._combo_hof_what = QtWidgets.QComboBox()
         self._combo_hof_what.addItems(["Top N by ELO", "Top N by fitness", "Best agent only"])
-        self._combo_hof_what.setItemData(0, "Add the N agents with highest global ELO.", QtCore.Qt.ItemDataRole.ToolTipRole)
-        self._combo_hof_what.setItemData(1, "Add the N agents with highest fitness (formula from Fitness panel).", QtCore.Qt.ItemDataRole.ToolTipRole)
-        self._combo_hof_what.setItemData(2, "Add only the single best agent by ELO.", QtCore.Qt.ItemDataRole.ToolTipRole)
         self._spin_hof_top_n = QtWidgets.QSpinBox()
         self._spin_hof_top_n.setRange(1, 999)
         self._spin_hof_top_n.setValue(5)
-        self._spin_hof_top_n.setToolTip("Number of top agents to add (for Top N options).")
 
-        def _on_hof_what_changed() -> None:
-            self._spin_hof_top_n.setEnabled(self._combo_hof_what.currentIndex() != 2)
-        self._combo_hof_what.currentIndexChanged.connect(_on_hof_what_changed)
-        _on_hof_what_changed()
-        hof_what_row = QtWidgets.QFormLayout()
-        lbl_hof_what = QtWidgets.QLabel("HOF what:")
-        lbl_hof_what.setToolTip("Which agents to add to the Hall of Fame.")
-        hof_what_row.addRow(lbl_hof_what, self._combo_hof_what)
-        hof_what_row.addRow(QtWidgets.QLabel("N:"), self._spin_hof_top_n)
-        hof_layout.addLayout(hof_what_row)
-        btn_export_hof = QtWidgets.QPushButton("Export HOF now")
-        btn_export_hof.setToolTip("Export current Hall of Fame agents to a JSON file.")
-        btn_export_hof.clicked.connect(self._on_export_hof_now)
-        hof_layout.addWidget(btn_export_hof)
-        export_main_layout.addWidget(hof_widget, 1)
-
-        next_layout.addWidget(self._next_export_frame)
-        self._next_gen_insights = QtWidgets.QLabel("Population size: —  Composition: —")
-        self._next_gen_insights.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
-        self._next_gen_insights.setWordWrap(True)
-        next_layout.addWidget(self._next_gen_insights)
-        next_group.setFixedHeight(FLOW_BOX_HEIGHT_ROW1)
-        flow_row1.addWidget(next_group, 1)
+        # Hidden label for next-generation insights (used by helper but not shown on this tab)
+        self._next_gen_insights = QtWidgets.QLabel("")
 
         flow_container = QtWidgets.QWidget()
         flow_vertical.addLayout(flow_row1)
@@ -1881,6 +1900,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
             elif hasattr(w, "currentTextChanged"):
                 w.currentTextChanged.connect(self._mark_league_params_dirty)
         self._cb_elo_tuning.toggled.connect(self._mark_league_params_dirty)
+        self._cb_elo_normalize.toggled.connect(self._mark_league_params_dirty)
         self._cb_ppo.toggled.connect(self._mark_league_params_dirty)
         self._combo_export_when.currentIndexChanged.connect(self._mark_league_params_dirty)
         self._combo_export_what.currentIndexChanged.connect(self._mark_league_params_dirty)
@@ -1898,6 +1918,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
             counts=(kept_count, mutate_slots, clone_slots),
         )
         self._mut_dist_widget.set_mutation_std(self._spin_mut_std.value())
+        # Visualize trait-level mutation probability (0–1) in the distribution widget
+        self._mut_dist_widget.set_mutation_prob(self._spin_trait_prob.value() / 100.0)
 
     def _update_tour_elo_enabled(self) -> None:
         enabled = self._cb_elo_tuning.isChecked()
@@ -2487,6 +2509,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
             "hof_what_index": self._combo_hof_what.currentIndex(),
             "hof_top_n": self._spin_hof_top_n.value(),
             "elo_tuning_checked": self._cb_elo_tuning.isChecked(),
+            "elo_normalize_checked": self._cb_elo_normalize.isChecked(),
             "ppo_checked": self._cb_ppo.isChecked(),
         }
 
@@ -2520,6 +2543,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
             self._spin_hof_top_n.setValue(int(ui["hof_top_n"]))
         if "elo_tuning_checked" in ui:
             self._cb_elo_tuning.setChecked(bool(ui["elo_tuning_checked"]))
+        if "elo_normalize_checked" in ui:
+            self._cb_elo_normalize.setChecked(bool(ui["elo_normalize_checked"]))
         if "ppo_checked" in ui:
             self._cb_ppo.setChecked(bool(ui["ppo_checked"]))
         self._update_tour_elo_enabled()
@@ -2530,6 +2555,14 @@ class LeagueTabWidget(QtWidgets.QWidget):
         style = "elo" if self._combo_league_style.currentText() == "ELO-based" else "random"
         player_count = int(self._combo_player_count.currentData() or 4)
         slots, sexual_n, clone, mutate = self._get_repro_counts()
+        # Enforce that reproduction counts completely fill GA slots when GA is enabled.
+        if slots > 0:
+            total = sexual_n + clone + mutate
+            if total != slots:
+                raise ValueError(
+                    f"Reproduction counts must fill all GA slots: clone({clone}) + mutate({mutate}) + sexual({sexual_n}) = {total}, "
+                    f"but GA-eligible slots = {slots}."
+                )
         trait_prob = self._spin_trait_prob.value() / 100.0
         elo_k = self._spin_elo_k.value() if self._cb_elo_tuning.isChecked() else 32.0
         elo_margin = self._spin_elo_margin.value() if self._cb_elo_tuning.isChecked() else 50.0
@@ -2543,6 +2576,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
             matchmaking_style=style,
             elo_k_factor=elo_k,
             elo_margin_scale=elo_margin,
+            normalize_elo_mean=self._cb_elo_normalize.isChecked(),
             ppo_top_k=ppo_top,
             ppo_updates_per_agent=ppo_updates,
             fitness_elo_a=self._spin_fitness_a.value(),
@@ -2551,8 +2585,6 @@ class LeagueTabWidget(QtWidgets.QWidget):
             fitness_avg_d=self._spin_fitness_d.value(),
             ga_config=GAConfig(
                 population_size=pop_size,
-                elite_fraction=(slots - sexual_n) / slots if slots > 0 else 0.1,
-                elite_clone_fraction=clone / (clone + mutate) if (clone + mutate) > 0 else 0.0,
                 sexual_offspring_count=sexual_n,
                 mutate_count=mutate,
                 clone_count=clone,
@@ -2575,6 +2607,8 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._spin_matches.setValue(cfg.rounds_per_generation)
         self._spin_elo_k.setValue(cfg.elo_k_factor)
         self._spin_elo_margin.setValue(cfg.elo_margin_scale)
+        # Default to True if field missing (backward compatibility with old configs)
+        self._cb_elo_normalize.setChecked(getattr(cfg, "normalize_elo_mean", True))
         self._spin_ppo_top_k.setValue(cfg.ppo_top_k)
         self._spin_ppo_updates.setValue(cfg.ppo_updates_per_agent)
         self._spin_fitness_a.setValue(cfg.fitness_elo_a)
@@ -2739,6 +2773,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._refresh_table()
         self._update_project_label()
         self._update_content_visibility()
+        self.project_path_changed.emit(path)
         QtWidgets.QMessageBox.information(self, "New Project", f"Created and opened project: {Path(path).name}")
 
     def open_project(self, path: str, *, show_message: bool = False) -> bool:
@@ -2755,6 +2790,7 @@ class LeagueTabWidget(QtWidgets.QWidget):
         self._state.project_path = path
         self._update_project_label()
         self._refresh_table()
+        self.project_path_changed.emit(path)
         if show_message:
             QtWidgets.QMessageBox.information(self, "Open", f"Loaded project from {path}")
         return True

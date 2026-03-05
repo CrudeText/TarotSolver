@@ -1,3 +1,77 @@
+from __future__ import annotations
+
+import random
+
+from tarot.ga import GAConfig, next_generation
+from tarot.tournament import Agent, Population
+
+
+def _make_ga_population(size: int = 6) -> Population:
+    pop = Population()
+    for i in range(size):
+        pop.add(
+            Agent(
+                id=f"A{i}",
+                name=f"A{i}",
+                player_counts=[4],
+            )
+        )
+    return pop
+
+
+def test_next_generation_deterministic_bands_and_counts():
+    pop = _make_ga_population(size=6)
+    # Give agents distinct fitness via ELO
+    for idx, agent in enumerate(pop.agents.values()):
+        agent.elo_global = 1500.0 + idx * 10.0
+    cfg = GAConfig(
+        population_size=6,
+        clone_count=2,
+        mutate_count=2,
+        sexual_offspring_count=2,
+        mutation_prob=1.0,
+        mutation_std=0.1,
+    )
+    rng = random.Random(0)
+
+    new_pop = next_generation(pop, cfg, rng=rng)
+
+    # No reference agents, so GA slots == population size
+    assert len(new_pop.agents) == 6
+
+    # Top 2 by fitness should be carried over unchanged (same ids)
+    # Original ids: A0..A5, with A5 best, A0 worst
+    # Sorted by fitness desc: A5, A4, A3, A2, A1, A0
+    # Clone band = [A5, A4]
+    assert "A5" in new_pop.agents
+    assert "A4" in new_pop.agents
+
+    # There should be exactly 2 mutated children and 2 sexual offspring
+    mutated = [aid for aid in new_pop.agents if "-c" in aid]
+    sexual = [aid for aid in new_pop.agents if aid.startswith("sex-")]
+    assert len(mutated) == 2
+    assert len(sexual) == 2
+
+
+def test_next_generation_invalid_counts_raise():
+    pop = _make_ga_population(size=4)
+    for idx, agent in enumerate(pop.agents.values()):
+        agent.elo_global = 1500.0 + idx * 10.0
+    # Clone + mutate + sexual != slots_for_evolved
+    cfg = GAConfig(
+        population_size=4,
+        clone_count=1,
+        mutate_count=1,
+        sexual_offspring_count=1,
+    )
+    rng = random.Random(0)
+    try:
+        next_generation(pop, cfg, rng=rng)
+    except ValueError as e:
+        assert "inconsistent with GA slots" in str(e)
+    else:
+        raise AssertionError("Expected ValueError for inconsistent GAConfig counts")
+
 """Tests for genetic algorithm helpers."""
 
 import random
@@ -40,15 +114,25 @@ def test_compute_fitness_uses_global_elo():
 
 def test_select_elites_and_next_generation():
     pop = _make_dummy_population()
-    cfg = GAConfig(population_size=4, elite_fraction=0.25, mutation_prob=1.0, mutation_std=0.1)
+    # Use elite_fraction only for select_elites; next_generation uses explicit counts.
+    cfg_elite = GAConfig(population_size=4, elite_fraction=0.25)
     rng = random.Random(123)
 
-    elites = select_elites(pop, cfg, compute_fitness)
+    elites = select_elites(pop, cfg_elite, compute_fitness)
     assert len(elites) == 1
     elite = elites[0]
 
-    new_pop = next_generation(pop, cfg, rng=rng, fitness_fn=compute_fitness)
-    assert len(new_pop.agents) == cfg.population_size
+    ga_cfg = GAConfig(
+        population_size=4,
+        clone_count=1,
+        mutate_count=3,
+        sexual_offspring_count=0,
+        mutation_prob=1.0,
+        mutation_std=0.1,
+    )
+
+    new_pop = next_generation(pop, ga_cfg, rng=rng, fitness_fn=compute_fitness)
+    assert len(new_pop.agents) == ga_cfg.population_size
 
     # Elite should still be present unchanged
     assert elite.id in new_pop.agents
@@ -81,7 +165,15 @@ def test_can_use_as_ga_parent_excludes_reference_agents():
         Agent(id="A1", name="A1", player_counts=[4], elo_global=1500, can_use_as_ga_parent=True)
     )
 
-    cfg = GAConfig(population_size=4, elite_fraction=0.25, mutation_prob=0.0, mutation_std=0.0)
+    # population_size matches total agents; 1 reference + 2 GA parents => 2 GA slots
+    cfg = GAConfig(
+        population_size=3,
+        clone_count=1,
+        mutate_count=1,
+        sexual_offspring_count=0,
+        mutation_prob=0.0,
+        mutation_std=0.0,
+    )
     rng = random.Random(42)
     new_pop = next_generation(pop, cfg, rng=rng)
 
@@ -94,13 +186,14 @@ def test_can_use_as_ga_parent_excludes_reference_agents():
             assert "ref" not in agent.parents
 
 
-def test_elite_clone_fraction():
-    """With elite_clone_fraction > 0, some offspring slots are filled by cloning elites."""
+def test_clone_band_preserves_best_agents_and_creates_mutants():
+    """Clone band: best agents are carried over unchanged; remaining slots are filled by mutants (no duplicate clones)."""
     pop = _make_dummy_population()
     cfg = GAConfig(
         population_size=4,
-        elite_fraction=0.25,
-        elite_clone_fraction=0.5,  # half of offspring slots = clones
+        clone_count=1,
+        mutate_count=3,
+        sexual_offspring_count=0,
         mutation_prob=0.0,
         mutation_std=0.0,
     )
@@ -109,13 +202,15 @@ def test_elite_clone_fraction():
     new_pop = next_generation(pop, cfg, rng=rng, fitness_fn=compute_fitness)
     assert len(new_pop.agents) == 4
 
-    # Elite A3 (highest ELO) should be kept
+    # Elite A3 (highest ELO) should be kept unchanged
     assert "A3" in new_pop.agents
-    # Some children should be clones (parent-id-cloneN)
-    clone_ids = [aid for aid in new_pop.all_ids() if "-clone" in aid]
-    mutate_ids = [aid for aid in new_pop.all_ids() if "-c" in aid and "-clone" not in aid]
-    assert len(clone_ids) >= 1
-    assert len(clone_ids) + len(mutate_ids) == 3  # 3 offspring slots
+    assert new_pop.get("A3") is pop.get("A3")
+
+    # Remaining slots should be filled by mutated children (ids with "-c")
+    other_ids = [aid for aid in new_pop.all_ids() if aid != "A3"]
+    assert len(other_ids) == 3
+    for cid in other_ids:
+        assert "-c" in cid
 
 
 def test_combine_agents_average():
@@ -164,12 +259,13 @@ def test_next_generation_count_based_sexual_offspring():
     assert len(new_pop.agents) == 4
 
     sex_ids = [aid for aid in new_pop.all_ids() if aid.startswith("sex-")]
-    clone_ids = [aid for aid in new_pop.all_ids() if "-clone" in aid]
-    mut_ids = [aid for aid in new_pop.all_ids() if "-c" in aid and "-clone" not in aid and not aid.startswith("sex-")]
+    mut_ids = [aid for aid in new_pop.all_ids() if "-c" in aid and not aid.startswith("sex-")]
+    original_ids = [aid for aid in new_pop.all_ids() if not aid.startswith("sex-") and "-c" not in aid]
 
+    # One sexual offspring, one unchanged elite (clone band), and two mutants
     assert len(sex_ids) == 1, "expected one sexual offspring"
-    assert len(clone_ids) == 1
     assert len(mut_ids) == 2
+    assert len(original_ids) == 1
 
     sexual = new_pop.get(sex_ids[0])
     assert len(sexual.parents) == 2, "sexual offspring must have two parents"

@@ -210,10 +210,22 @@ def _add_league_4p_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Deals per match in league tournaments.",
     )
     parser.add_argument(
-        "--elite-fraction",
-        type=float,
-        default=0.25,
-        help="Fraction of elites kept unchanged by GA.",
+        "--clone-count",
+        type=int,
+        default=2,
+        help="Number of top agents (by fitness) carried over unchanged each generation.",
+    )
+    parser.add_argument(
+        "--mutate-count",
+        type=int,
+        default=4,
+        help="Number of mid-ranked agents replaced by mutated children each generation.",
+    )
+    parser.add_argument(
+        "--sexual-offspring-count",
+        type=int,
+        default=2,
+        help="Number of worst-ranked agents replaced by sexual offspring each generation.",
     )
     parser.add_argument(
         "--mutation-prob",
@@ -261,7 +273,9 @@ def _cmd_league_4p(args: argparse.Namespace) -> None:
 
     ga_cfg = GAConfig(
         population_size=args.population_size,
-        elite_fraction=args.elite_fraction,
+        sexual_offspring_count=args.sexual_offspring_count,
+        mutate_count=args.mutate_count,
+        clone_count=args.clone_count,
         mutation_prob=args.mutation_prob,
         mutation_std=args.mutation_std,
     )
@@ -299,12 +313,14 @@ def _cmd_league_4p(args: argparse.Namespace) -> None:
                 "fitness_elo_b": league_cfg.fitness_elo_b,
                 "fitness_avg_c": league_cfg.fitness_avg_c,
                 "fitness_avg_d": league_cfg.fitness_avg_d,
-                "ga_config": {
-                    "population_size": ga_cfg.population_size,
-                    "elite_fraction": ga_cfg.elite_fraction,
-                    "mutation_prob": ga_cfg.mutation_prob,
-                    "mutation_std": ga_cfg.mutation_std,
-                },
+                    "ga_config": {
+                        "population_size": ga_cfg.population_size,
+                        "clone_count": ga_cfg.clone_count,
+                        "mutate_count": ga_cfg.mutate_count,
+                        "sexual_offspring_count": ga_cfg.sexual_offspring_count,
+                        "mutation_prob": ga_cfg.mutation_prob,
+                        "mutation_std": ga_cfg.mutation_std,
+                    },
             },
             "summary": summary,
             "agents": [

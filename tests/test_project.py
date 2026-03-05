@@ -203,7 +203,14 @@ def test_run_league_generations_writes_log(tmp_path: Path) -> None:
         deals_per_match=1,
         rounds_per_generation=1,
         ppo_top_k=0,
-        ga_config=GAConfig(population_size=4, elite_fraction=0.25, mutation_prob=1.0, mutation_std=0.1),
+        ga_config=GAConfig(
+            population_size=4,
+            clone_count=1,
+            mutate_count=2,
+            sexual_offspring_count=1,
+            mutation_prob=1.0,
+            mutation_std=0.1,
+        ),
     )
     log_path = tmp_path / "logs" / "league_run.jsonl"
 
